@@ -57,6 +57,14 @@ bool DeviceConfig::getAGCMode() {
     return agcMode.load();
 }
 
+void DeviceConfig::setDenoiseMode(bool denoiseMode_in) {
+    denoiseMode.store(denoiseMode_in);
+}
+
+bool DeviceConfig::getDenoiseMode() {
+    return denoiseMode.load();
+}
+
 
 void DeviceConfig::setDeviceId(std::string deviceId_in) {
     std::lock_guard < std::mutex > lock(busy_lock);

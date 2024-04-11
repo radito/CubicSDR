@@ -3,12 +3,12 @@
 
 #pragma once
 
+#include <memory>
 #include <queue>
 #include <vector>
-#include <memory>
 
-#include "DemodDefs.h"
 #include "AudioThread.h"
+#include "DemodDefs.h"
 #include "Modem.h"
 #include "SpinMutex.h"
 
@@ -19,57 +19,58 @@
 class DemodulatorInstance;
 
 class DemodulatorThread : public IOThread {
-public:
+ public:
+  explicit DemodulatorThread(DemodulatorInstance* parent);
+  ~DemodulatorThread() override;
 
-    explicit DemodulatorThread(DemodulatorInstance* parent);
-    ~DemodulatorThread() override;
+  void onBindOutput(std::string name, ThreadQueueBasePtr threadQueue) override;
 
-    void onBindOutput(std::string name, ThreadQueueBasePtr threadQueue) override;
-    
-    void run() override;
-    void terminate() override;
-    
-    void setMuted(bool muted_in);
-    bool isMuted();
-    
-    float getSignalLevel();
-    float getSignalCeil();
-    void setSquelchEnabled(bool squelchEnabled_in);
-    bool isSquelchEnabled();
-    float getSignalFloor();
-    void setSquelchLevel(float signal_level_in);
-    float getSquelchLevel();
-   
-    bool getSquelchBreak();
+  void run() override;
+  void terminate() override;
 
+  void setMuted(bool muted_in);
+  bool isMuted();
 
-    static void releaseSquelchLock(DemodulatorInstance* inst);
-protected:
-    
-    double abMagnitude(float inphase, float quadrature);
-    double linearToDb(double linear);
+  void setDenoise(bool denoise_in);
+  bool isDenoise();
 
-    DemodulatorInstance* demodInstance;
-    ReBuffer<AudioThreadInput> outputBuffers;
+  float getSignalLevel();
+  float getSignalCeil();
+  void setSquelchEnabled(bool squelchEnabled_in);
+  bool isSquelchEnabled();
+  float getSignalFloor();
+  void setSquelchLevel(float signal_level_in);
+  float getSquelchLevel();
 
-    std::atomic_bool muted;
+  bool getSquelchBreak();
 
-    std::atomic<float> squelchLevel;
-    std::atomic<float> signalLevel, signalFloor, signalCeil;
-    std::atomic<bool> squelchEnabled, squelchBreak;
-    
-    static DemodulatorInstance* squelchLock;
-    static std::mutex squelchLockMutex;
-    
-    
-    Modem *cModem = nullptr;
-    ModemKit *cModemKit = nullptr;
-    
-    DemodulatorThreadPostInputQueuePtr iqInputQueue;
-    AudioThreadInputQueuePtr audioOutputQueue;
-    DemodulatorThreadOutputQueuePtr audioVisOutputQueue;
-    DemodulatorThreadOutputQueuePtr audioSinkOutputQueue = nullptr;
+  static void releaseSquelchLock(DemodulatorInstance* inst);
 
-    //protects the audioVisOutputQueue dynamic binding change at runtime (in DemodulatorMgr)
-    SpinMutex m_mutexAudioVisOutputQueue;
+ protected:
+  double abMagnitude(float inphase, float quadrature);
+  double linearToDb(double linear);
+
+  DemodulatorInstance* demodInstance;
+  ReBuffer<AudioThreadInput> outputBuffers;
+
+  std::atomic_bool muted;
+  std::atomic_bool denoise;
+
+  std::atomic<float> squelchLevel;
+  std::atomic<float> signalLevel, signalFloor, signalCeil;
+  std::atomic<bool> squelchEnabled, squelchBreak;
+
+  static DemodulatorInstance* squelchLock;
+  static std::mutex squelchLockMutex;
+
+  Modem* cModem = nullptr;
+  ModemKit* cModemKit = nullptr;
+
+  DemodulatorThreadPostInputQueuePtr iqInputQueue;
+  AudioThreadInputQueuePtr audioOutputQueue;
+  DemodulatorThreadOutputQueuePtr audioVisOutputQueue;
+  DemodulatorThreadOutputQueuePtr audioSinkOutputQueue = nullptr;
+
+  //protects the audioVisOutputQueue dynamic binding change at runtime (in DemodulatorMgr)
+  SpinMutex m_mutexAudioVisOutputQueue;
 };

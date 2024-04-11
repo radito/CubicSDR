@@ -36,6 +36,9 @@ public:
 
     void setAGCMode(bool agcMode_in);
     bool getAGCMode();
+
+    void setDenoiseMode(bool denoiseMode_in);
+    bool getDenoiseMode();
     
     void setDeviceId(std::string deviceId_in);
     std::string getDeviceId();
@@ -73,6 +76,7 @@ private:
     std::atomic_int ppm{};
     std::atomic_llong offset{};
     std::atomic_bool agcMode{};
+    std::atomic_bool denoiseMode{};
     std::atomic_long sampleRate{};
     std::string antennaName;
     ConfigSettings streamOpts;

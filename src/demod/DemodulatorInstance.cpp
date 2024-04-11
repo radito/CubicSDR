@@ -524,6 +524,15 @@ void DemodulatorInstance::setMuted(bool muted_in) {
     wxGetApp().getDemodMgr().setLastMuted(muted_in);
 }
 
+bool DemodulatorInstance::isDenoise() {
+    return demodulatorThread->isDenoise();
+}
+
+void DemodulatorInstance::setDenoise(bool denoise_in) {
+    denoise = denoise_in;
+    demodulatorThread->setDenoise(denoise_in);
+}
+
 bool DemodulatorInstance::isRecording()
 {
     return recording.load();

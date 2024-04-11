@@ -3,51 +3,53 @@
 
 #pragma once
 
-#include <queue>
-#include <vector>
-#include <map>
-#include <string>
 #include <atomic>
+#include <map>
 #include <memory>
-#include "ThreadBlockingQueue.h"
-#include "RtAudio.h"
+#include <queue>
+#include <string>
+#include <vector>
+
 #include "DemodDefs.h"
+#include "RtAudio.h"
+#include "ThreadBlockingQueue.h"
+
+extern "C" {
+#include "rnnoise.h"
+}
 
 class AudioThreadInput {
-public:
-    long long frequency{};
-    int inputRate{};
-    int sampleRate{};
-    int channels{};
-    float peak{};
-    int type{};
-    bool is_squelch_active{};
+ public:
+  long long frequency{};
+  int inputRate{};
+  int sampleRate{};
+  int channels{};
+  float peak{};
+  int type{};
+  bool is_squelch_active{};
+  bool is_denoised{};
 
-    std::vector<float> data;
+  std::vector<float> data;
+  std::vector<float> dataOut;
 
-    AudioThreadInput() :
-        frequency(0), inputRate(0), sampleRate(0), channels(0), peak(0), type(0), is_squelch_active(false) {
+  AudioThreadInput()
+      : frequency(0), inputRate(0), sampleRate(0), channels(0), peak(0), type(0), is_squelch_active(false), is_denoised(false) {}
 
-    }
+  explicit AudioThreadInput(AudioThreadInput* copyFrom) { copy(copyFrom); }
 
+  void copy(AudioThreadInput* copyFrom) {
+    frequency = copyFrom->frequency;
+    inputRate = copyFrom->inputRate;
+    sampleRate = copyFrom->sampleRate;
+    channels = copyFrom->channels;
+    peak = copyFrom->peak;
+    type = copyFrom->type;
+    is_squelch_active = copyFrom->is_squelch_active;
+    is_denoised = copyFrom->is_denoised;
+    data.assign(copyFrom->data.begin(), copyFrom->data.end());
+  }
 
-    explicit AudioThreadInput(AudioThreadInput *copyFrom) {
-        copy(copyFrom);
-    }
-
-    void copy(AudioThreadInput *copyFrom) {
-        frequency = copyFrom->frequency;
-        inputRate = copyFrom->inputRate;
-        sampleRate = copyFrom->sampleRate;
-        channels = copyFrom->channels;
-        peak = copyFrom->peak;
-        type = copyFrom->type;
-        is_squelch_active = copyFrom->is_squelch_active;
-        data.assign(copyFrom->data.begin(), copyFrom->data.end());
-    }
-
-
-    virtual ~AudioThreadInput() = default;
+  virtual ~AudioThreadInput() = default;
 };
 
 typedef std::shared_ptr<AudioThreadInput> AudioThreadInputPtr;
@@ -57,17 +59,13 @@ typedef ThreadBlockingQueue<AudioThreadInputPtr> DemodulatorThreadOutputQueue;
 typedef std::shared_ptr<DemodulatorThreadOutputQueue> DemodulatorThreadOutputQueuePtr;
 
 class AudioThreadCommand {
-public:
-    enum class Type {
-        AUDIO_THREAD_CMD_NULL, AUDIO_THREAD_CMD_SET_DEVICE, AUDIO_THREAD_CMD_SET_SAMPLE_RATE
-    };
+ public:
+  enum class Type { AUDIO_THREAD_CMD_NULL, AUDIO_THREAD_CMD_SET_DEVICE, AUDIO_THREAD_CMD_SET_SAMPLE_RATE };
 
-    AudioThreadCommand() :
-        cmdType(AudioThreadCommand::Type::AUDIO_THREAD_CMD_NULL), int_value(0) {
-    }
+  AudioThreadCommand() : cmdType(AudioThreadCommand::Type::AUDIO_THREAD_CMD_NULL), int_value(0) {}
 
-    AudioThreadCommand::Type cmdType;
-    int int_value;
+  AudioThreadCommand::Type cmdType;
+  int int_value;
 };
 
 typedef ThreadBlockingQueue<AudioThreadInputPtr> AudioThreadInputQueue;
@@ -77,75 +75,76 @@ typedef std::shared_ptr<AudioThreadInputQueue> AudioThreadInputQueuePtr;
 typedef std::shared_ptr<AudioThreadCommandQueue> AudioThreadCommandQueuePtr;
 
 class AudioThread : public IOThread {
+ public:
+  AudioThread();
+  ~AudioThread() override;
 
-public:
+  static void enumerateDevices(std::vector<RtAudio::DeviceInfo>& devs);
 
-    AudioThread();
-    ~AudioThread() override;
+  void setInitOutputDevice(int deviceId, int sampleRate_in = -1);
+  int getOutputDevice();
 
-    static void enumerateDevices(std::vector<RtAudio::DeviceInfo> &devs);
+  int getSampleRate();
 
-    void setInitOutputDevice(int deviceId, int sampleRate_in = -1);
-    int getOutputDevice();
+  void run() override;
+  void terminate() override;
 
-    int getSampleRate();
+  bool isActive();
+  void setActive(bool state);
 
-    void run() override;
-    void terminate() override;
+  void setGain(float gain_in);
 
-    bool isActive();
-    void setActive(bool state);
+  static std::map<int, int> deviceSampleRate;
 
-    void setGain(float gain_in);
+  AudioThreadCommandQueue* getCommandQueue();
 
-    static std::map<int, int> deviceSampleRate;
+  // give access to the this AudioThread lock
+  std::recursive_mutex& getMutex();
 
-    AudioThreadCommandQueue *getCommandQueue();
+  static void deviceCleanup();
+  static void setDeviceSampleRate(int deviceId, int sampleRate);
 
-    //give access to the this AudioThread lock
-    std::recursive_mutex& getMutex();
+  //
+  void attachControllerThread(std::thread* controllerThread);
 
-    static void deviceCleanup();
-    static void setDeviceSampleRate(int deviceId, int sampleRate);
+  // fields below, only to be used by other AudioThreads !
+  size_t underflowCount;
+  // protected by m_mutex
+  std::vector<AudioThread*> boundThreads;
+  AudioThreadInputQueuePtr inputQueue;
+  AudioThreadInputPtr currentInput;
+  size_t audioQueuePtr;
+  float gain;
 
-    //
-    void attachControllerThread(std::thread* controllerThread);
+  int debug;
 
-    //fields below, only to be used by other AudioThreads !
-    size_t underflowCount;
-    //protected by m_mutex
-    std::vector<AudioThread *> boundThreads;
-    AudioThreadInputQueuePtr inputQueue;
-    AudioThreadInputPtr currentInput;
-    size_t audioQueuePtr;
-    float gain;
+  DenoiseState* st;
 
-private:
+ private:
+  std::atomic_bool active;
+  std::atomic_int outputDevice;
 
-    std::atomic_bool active;
-    std::atomic_int outputDevice;
+  RtAudio dac;
+  unsigned int nBufferFrames;
+  RtAudio::StreamOptions opts;
+  RtAudio::StreamParameters parameters;
+  AudioThreadCommandQueue cmdQueue;
+  int sampleRate;
 
-    RtAudio dac;
-    unsigned int nBufferFrames;
-    RtAudio::StreamOptions opts;
-    RtAudio::StreamParameters parameters;
-    AudioThreadCommandQueue cmdQueue;
-    int sampleRate;
+  // if != nullptr, it mean AudioThread is a controller thread.
+  std::thread* controllerThread;
 
-    //if != nullptr, it mean AudioThread is a controller thread.
-    std::thread* controllerThread;
+  // The own m_mutex protecting this AudioThread, in particular boundThreads
+  std::recursive_mutex m_mutex;
 
-    //The own m_mutex protecting this AudioThread, in particular boundThreads
-    std::recursive_mutex m_mutex;
+  void setupDevice(int deviceId);
+  void setSampleRate(int sampleRate_in);
 
-    void setupDevice(int deviceId);
-    void setSampleRate(int sampleRate_in);
+  void bindThread(AudioThread* other);
+  void removeThread(AudioThread* other);
 
-    void bindThread(AudioThread *other);
-    void removeThread(AudioThread *other);
+  static std::map<int, AudioThread*> deviceController;
 
-    static std::map<int, AudioThread* > deviceController;
-
-    //The mutex protecting static deviceController, deviceThread and deviceSampleRate access.
-    static std::recursive_mutex m_device_mutex;
+  // The mutex protecting static deviceController, deviceThread and deviceSampleRate access.
+  static std::recursive_mutex m_device_mutex;
 };

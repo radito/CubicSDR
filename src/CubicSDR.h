@@ -161,6 +161,9 @@ public:
     void setAGCMode(bool mode);
     bool getAGCMode();
 
+    void setDenoiseMode(bool mode);
+    bool getDenoiseMode();
+
     void setGain(const std::string& name, float gain_in);
     float getGain(const std::string& name);
 
@@ -205,6 +208,7 @@ private:
     std::atomic_llong sampleRate;
     std::string antennaName;
     std::atomic_bool agcMode;
+    std::atomic_bool denoiseMode;
     std::atomic_bool shuttingDown;
 
     SDRThread *sdrThread = nullptr;

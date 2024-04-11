@@ -1,0 +1,4 @@
+[submodule "external/rnnoise"]
+	path = external/rnnoise
+	url = https://gitlab.xiph.org/xiph/rnnoise.git
+	branch = master

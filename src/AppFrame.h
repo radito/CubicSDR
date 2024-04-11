@@ -122,6 +122,7 @@ private:
 	wxMenuItem *showTipMenuItem;
 	wxMenuItem *iqSwapMenuItem = nullptr;
 	wxMenuItem *agcMenuItem = nullptr;
+	wxMenuItem *rnnMenuItem = nullptr;
 
 	wxMenu *sampleRateMenu = nullptr;
 
@@ -263,6 +264,7 @@ private:
 	bool actionOnMenuSDRDevices(wxCommandEvent &event);
 	bool actionOnMenuSetPPM(wxCommandEvent &event);
 	bool actionOnMenuClose(wxCommandEvent &event);
+	bool actionOnRnnNoise(wxCommandEvent &event);
 
 
 	/**
@@ -328,6 +330,7 @@ private:
 #define wxID_SDR_START_STOP 2010
 #define wxID_SET_DB_OFFSET 2012
 #define wxID_ABOUT_CUBICSDR 2013
+#define wxID_RNNOISE_CONTROL 2014
 
 #define wxID_OPEN_BOOKMARKS 2020
 #define wxID_SAVE_BOOKMARKS 2021

@@ -1031,6 +1031,10 @@ void AppFrame::handleUpdateDeviceParams() {
     } else if (!wxGetApp().getAGCMode()) {
         wxGetApp().setAGCMode(true);
     }
+    
+    newSettingsMenu->AppendSeparator();
+    agcMenuItem = newSettingsMenu->AppendCheckItem(wxID_RNNOISE_CONTROL, "Enable RNNoise");
+    agcMenuItem->Check(wxGetApp().getDenoiseMode());
 
     //Add an Antenna menu if more than one (RX) antenna, to keep the UI free of useless entries
     antennaNames.clear();
@@ -1308,7 +1312,8 @@ void AppFrame::OnMenu(wxCommandEvent &event) {
     || actionOnMenuRecording(event)
     || actionOnMenuDisplay(event)
     //Optional : Rig
-    || actionOnMenuRig(event);
+    || actionOnMenuRig(event)
+    || actionOnRnnNoise(event);
 }
 
 
@@ -2107,6 +2112,23 @@ bool AppFrame::actionOnMenuSDRStartStop(wxCommandEvent &event) {
                 wxGetApp().setDevice(dev, 0);
             }
         }
+        return true;
+    }
+    return false;
+}
+
+bool AppFrame::actionOnRnnNoise(wxCommandEvent &event) {
+    if (event.GetId() == wxID_RNNOISE_CONTROL) {
+        // wxGetApp().getSDRThread()->setIQSwap(!wxGetApp().getSDRThread()->getIQSwap());
+        bool setDenoise = !wxGetApp().getDenoiseMode();
+        wxGetApp().setDenoiseMode(setDenoise);
+        
+        std::vector<DemodulatorInstancePtr> demods = wxGetApp().getDemodMgr().getDemodulators();
+        
+        for (auto &demod : demods) {
+            demod->setDenoise(setDenoise);
+        }
+
         return true;
     }
     return false;

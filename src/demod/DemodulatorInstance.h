@@ -111,6 +111,9 @@ public:
     bool isMuted();
     void setMuted(bool muted_in);
 
+    void setDenoise(bool denoise_in);
+    bool isDenoise();
+
     bool isRecording();
     void setRecording(bool recording);
 
@@ -161,6 +164,7 @@ private:
     std::atomic_bool muted;
     std::atomic_bool deltaLock;
     std::atomic_bool recording;
+    std::atomic_bool denoise;
 
     std::atomic_int deltaLockOfs;
 

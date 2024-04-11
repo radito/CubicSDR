@@ -93,6 +93,8 @@ ENDIF()
 
 set(USE_HAMLIB OFF CACHE BOOL "Support hamlib for radio control functions.")
 
+set(USE_RNNOISE ON CACHE BOOL "Enable RNNoise")
+
 if (USE_HAMLIB)
     find_package(hamlib REQUIRED)
     
@@ -162,8 +164,10 @@ IF (MSVC)
     SET(LIQUID_DLL "${PROJECT_SOURCE_DIR}/external/liquid-dsp/msvc/${EX_PLATFORM}/libliquid.dll" CACHE STRING "Liquid-DSP DLL")
     SET(HAMLIB_DLLS "${PROJECT_SOURCE_DIR}/external/hamlib/${EX_PLATFORM}/libhamlib-4.dll" CACHE STRING "HAMLIB DLLS")
 ELSE (MSVC)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20")
+
     ADD_DEFINITIONS(
-        -std=c++0x 
+        # -std=c++0x 
         -pthread
     )
 ENDIF(MSVC)
@@ -586,6 +590,34 @@ IF (USE_HAMLIB)
     )
 ENDIF()
 
+IF (USE_RNNOISE)
+    SET (cubicsdr_headers
+        ${cubicsdr_headers}
+        external/rnnoise/src/arch.h
+		external/rnnoise/src/celt_lpc.h
+		external/rnnoise/src/common.h
+		external/rnnoise/src/_kiss_fft_guts.h
+		external/rnnoise/src/kiss_fft.h
+		external/rnnoise/src/opus_types.h
+		external/rnnoise/src/pitch.h
+		external/rnnoise/src/rnn_data.h
+		external/rnnoise/src/rnn.h
+		external/rnnoise/src/tansig_table.h
+    )
+
+    SET (cubicsdr_sources
+        ${cubicsdr_sources}
+        external/rnnoise/src/denoise.c
+        external/rnnoise/src/rnn.c
+        external/rnnoise/src/rnn_data.c
+        external/rnnoise/src/rnn_reader.c
+        external/rnnoise/src/pitch.c
+        external/rnnoise/src/kiss_fft.c
+        external/rnnoise/src/celt_lpc.c
+    )
+    
+    include_directories(${PROJECT_SOURCE_DIR}/external/rnnoise/include)
+ENDIF()
 
 SET (CUBICSDR_FONTS 
     ${PROJECT_SOURCE_DIR}/font/vera_sans_mono12.fnt
@@ -725,10 +757,10 @@ IF (APPLE AND BUNDLE_APP)
     set(CPACK_BINARY_DRAGNDROP ON)
  
     SET(MACOSX_BUNDLE_BUNDLE_NAME CubicSDR)
-    SET(CPACK_APPLE_BUNDLE_ID "com.cubicproductions.cubicsdr")    
-    set(CUBICSDR_CODE_SIGN OFF CACHE BOOL "Code Signing")
+    SET(CPACK_APPLE_BUNDLE_ID "com.cubicproductions.cubicsdr")
+    set(CUBICSDR_CODE_SIGN ON CACHE BOOL "Code Signing")
     
-    set(BUNDLE_SOAPY_MODS OFF CACHE BOOL "Bundle local SoapySDR modules")
+    set(BUNDLE_SOAPY_MODS ON CACHE BOOL "Bundle local SoapySDR modules")
     set(BUNDLE_MIR_SDR OFF CACHE BOOL "Bundle mir_sdr for personal use only -- do not distribute.")
     
     IF (BUNDLE_SOAPY_MODS)
@@ -742,9 +774,11 @@ IF (APPLE AND BUNDLE_APP)
         )
         ENDIF()
     ENDIF()
-    
+
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20")
+
     ADD_DEFINITIONS(
-        -std=c++0x 
+        # -std=c++0x 
         -pthread
         -D_OSX_APP_
     )   
@@ -788,7 +822,8 @@ IF (APPLE AND BUNDLE_APP)
         
     IF (BUNDLE_SOAPY_MODS)
     message(STATUS "SOAPY_ROOT: ${CMAKE_INSTALL_PREFIX}")
-    SET(SOAPY_SDR_MOD_PATH "${CMAKE_INSTALL_PREFIX}/lib/SoapySDR/modules${SOAPY_SDR_ABI_VERSION}")
+    # SET(SOAPY_SDR_MOD_PATH "${CMAKE_INSTALL_PREFIX}/lib/SoapySDR/modules${SOAPY_SDR_ABI_VERSION}")
+    SET(SOAPY_SDR_MOD_PATH "/opt/homebrew/lib/SoapySDR/modules${SOAPY_SDR_ABI_VERSION}/cubicsdr")
     message(STATUS "SOAPY_SDR_MOD_PATH: ${SOAPY_SDR_MOD_PATH}")
     
     file(GLOB SOAPY_MODS ${SOAPY_SDR_MOD_PATH}/*.so)
@@ -814,8 +849,8 @@ IF (APPLE AND BUNDLE_APP)
        FOREACH(SOAPY_MOD_FILE ${SOAPY_MODS})
            GET_FILENAME_COMPONENT(SOAPY_MOD_NAME ${SOAPY_MOD_FILE} NAME)
            IF(NOT BUNDLE_MIR_SDR) # prevent inclusion of libmirsdrapi-rsp.so
-           IF(${SOAPY_MOD_NAME} STREQUAL "libsdrPlaySupport.so")
-               message(STATUS "Excluding libsdrPlaySupport.so")
+           IF(${SOAPY_MOD_NAME} STREQUAL "libsdrPlaySupportf.so")
+               message(STATUS "Excluding libsdrPlaySupportf.so")
                CONTINUE()
            ELSE()
                message(STATUS "Bundling ${SOAPY_MOD_NAME} from ${SOAPY_MOD_FILE}")
@@ -828,7 +863,7 @@ IF (APPLE AND BUNDLE_APP)
    ENDIF(BUNDLE_SOAPY_MODS)
    
    IF (CUBICSDR_CODE_SIGN)
-       SET (CUBICSDR_CERT "3rd Party Mac Developer Application: [Name]" CACHE STRING "Code signing certificate name.")
+       SET (CUBICSDR_CERT "-" CACHE STRING "Code signing certificate name.")
        MESSAGE(STATUS "Code Signing Enabled: ${CUBICSDR_CERT}")        
   
        CONFIGURE_FILE(
