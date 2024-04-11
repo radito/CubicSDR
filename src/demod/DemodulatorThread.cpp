@@ -201,7 +201,7 @@ void DemodulatorThread::run() {
     int currEpoch = getEpochMs();
     int devEpoch = currEpoch - lastSquelchTime;
 
-    bool squelched = squelchEnabled && (signalLevel < squelchLevel) && (devEpoch > 500);
+    bool squelched = squelchEnabled && (currentSignalLevel < squelchLevel) && (devEpoch > 500);
 
     if (squelchEnabled) {
       if (!squelched && !squelchBreak) {
