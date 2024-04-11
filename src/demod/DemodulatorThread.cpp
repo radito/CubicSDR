@@ -3,6 +3,7 @@
 
 #include "DemodulatorThread.h"
 
+#include <chrono>
 #include <cmath>
 #include <vector>
 
@@ -69,6 +70,10 @@ double DemodulatorThread::linearToDb(double linear) {
     linear = double(SMALL);
   }
   return 20.0 * log10(linear);
+}
+
+int DemodulatorThread::getEpochMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
 void DemodulatorThread::run() {
@@ -148,7 +153,7 @@ void DemodulatorThread::run() {
     if (audioOutputQueue != nullptr && ati && !ati->data.empty()) {
       double accum = 0;
 
-      if (cModem->useSignalOutput()) {
+      if (cModem->useSignalOutput() && false) {
         for (auto i : ati->data) {
           accum += abMagnitude(i, 0.0);
         }
@@ -193,10 +198,15 @@ void DemodulatorThread::run() {
       signalLevel = signalLevel + (currentSignalLevel - signalLevel) * 0.05 * sampleTime * 30.0;
     }
 
-    bool squelched = squelchEnabled && (signalLevel < squelchLevel);
+    int currEpoch = getEpochMs();
+    int devEpoch = currEpoch - lastSquelchTime;
+
+    bool squelched = squelchEnabled && (signalLevel < squelchLevel) && (devEpoch > 500);
 
     if (squelchEnabled) {
       if (!squelched && !squelchBreak) {
+        lastSquelchTime = getEpochMs();
+
         if (wxGetApp().getSoloMode() && !wxGetApp().getAppFrame()->isUserDemodBusy()) {
           std::lock_guard<std::mutex> lock(squelchLockMutex);
           if (squelchLock == nullptr) {

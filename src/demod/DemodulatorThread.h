@@ -44,6 +44,8 @@ class DemodulatorThread : public IOThread {
 
   bool getSquelchBreak();
 
+  int getEpochMs();
+
   static void releaseSquelchLock(DemodulatorInstance* inst);
 
  protected:
@@ -59,6 +61,8 @@ class DemodulatorThread : public IOThread {
   std::atomic<float> squelchLevel;
   std::atomic<float> signalLevel, signalFloor, signalCeil;
   std::atomic<bool> squelchEnabled, squelchBreak;
+
+  std::atomic<int> lastSquelchTime;
 
   static DemodulatorInstance* squelchLock;
   static std::mutex squelchLockMutex;
