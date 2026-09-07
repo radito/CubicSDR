@@ -20,8 +20,8 @@ concurrency:
 
 jobs:
   build-dmg:
-    name: Build optimized Apple Silicon DMG
-    runs-on: macos-15
+    name: Build optimized Apple Silicon DMG on macOS 26
+    runs-on: macos-26
     timeout-minutes: 45
 
     env:
@@ -37,12 +37,18 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
-      - name: Verify native ARM64 runner
+      - name: Verify macOS 26 ARM64 runner
         shell: bash
         run: |
           set -euo pipefail
+
           test "$(uname -m)" = "arm64"
-          echo "Building on $(sw_vers -productVersion) ($(uname -m))"
+          macos_version="$(sw_vers -productVersion)"
+          test "${macos_version%%.*}" = "26"
+
+          echo "Building on macOS ${macos_version} ($(uname -m))"
+          xcodebuild -version
+          cmake --version
 
       - name: Install build and SDR dependencies
         shell: bash
@@ -57,38 +63,87 @@ jobs:
             soapysdr \
             hamlib \
             libusb \
+            hackrf \
+            airspy \
+            airspyhf \
+            libbladerf \
             librtlsdr \
             soapyrtlsdr
 
-      - name: Build and install SoapyRemote
+      - name: Build and install Soapy device modules
         shell: bash
         run: |
           set -euo pipefail
 
-          archive="${RUNNER_TEMP}/soapyremote-0.5.2.tar.gz"
-          source_dir="${RUNNER_TEMP}/soapyremote-source"
-          build_dir="${RUNNER_TEMP}/soapyremote-build"
+          build_soapy_module() {
+            local name="$1"
+            local repository="$2"
+            local revision="$3"
+            local checksum="$4"
+            local archive="${RUNNER_TEMP}/${name}.tar.gz"
+            local source_dir="${RUNNER_TEMP}/${name}-source"
+            local build_dir="${RUNNER_TEMP}/${name}-build"
 
-          curl --fail --location --retry 3 \
-            --output "$archive" \
-            "https://github.com/pothosware/SoapyRemote/archive/soapy-remote-0.5.2.tar.gz"
-          echo "66a372d85c984e7279b4fdc0a7f5b0d7ba340e390bc4b8bd626a6523cd3c3c76  $archive" \
-            | shasum -a 256 --check
+            curl --fail --location --retry 3 \
+              --output "$archive" \
+              "https://github.com/pothosware/${repository}/archive/${revision}.tar.gz"
+            echo "${checksum}  ${archive}" | shasum -a 256 --check
 
-          mkdir -p "$source_dir"
-          tar -xzf "$archive" --strip-components=1 -C "$source_dir"
+            mkdir -p "$source_dir"
+            tar -xzf "$archive" --strip-components=1 -C "$source_dir"
 
-          cmake -S "$source_dir" -B "$build_dir" -G Ninja \
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$(brew --prefix)" \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
-          cmake --build "$build_dir" --parallel "$(sysctl -n hw.logicalcpu)"
-          cmake --install "$build_dir"
+            cmake -S "$source_dir" -B "$build_dir" -G Ninja \
+              -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_INSTALL_PREFIX="$(brew --prefix)" \
+              -DCMAKE_PREFIX_PATH="$(brew --prefix)" \
+              -DCMAKE_OSX_ARCHITECTURES=arm64 \
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
+            cmake --build "$build_dir" --parallel "$(sysctl -n hw.logicalcpu)"
+            cmake --install "$build_dir"
+          }
+
+          # Match the open-source Soapy modules used by the local macOS build.
+          # Each archive is pinned by both commit and SHA-256. SoapyIris is no
+          # longer publicly available at its original source, and SDRplay needs
+          # the proprietary sdrplay_api SDK, so neither can be built in CI.
+          build_soapy_module \
+            soapyremote SoapyRemote \
+            f920d9bf10f62f67c8e31b7dc25090bc784e5210 \
+            bdd836e8880ae4face6e29416ff0b75cf1048a998bb6d6b360c37c3df4c7cd76
+          build_soapy_module \
+            soapyaudio SoapyAudio \
+            2ae84e32a72524701789df6d0a511ab484aa0897 \
+            8da09104e58481b616268920e12243935c443e22cf70b9d3c95020206729fda2
+          build_soapy_module \
+            soapyhackrf SoapyHackRF \
+            79077f0425f732954c1d74dbbacd788b0ac7d733 \
+            227ec4e91754daac4a12ce727c98f494c64d9e45c71e1aa6bf43aeffcbf44b08
+          build_soapy_module \
+            soapyairspy SoapyAirspy \
+            411f73e16532cf6c0fe40209b83e7115ad43c108 \
+            be17d6468ed81031aab8f81e1f3fdcf50a4fe8469a9a18b68ab214c1da03af3c
+          build_soapy_module \
+            soapyairspyhf SoapyAirspyHF \
+            d6825331a6bfc3578dc6fe5091fce3d550b6af3c \
+            83f93c30f37277c1acc910fb37978e20378bcbcf53e399a190a2d45d908eb535
+          build_soapy_module \
+            soapybladerf SoapyBladeRF \
+            1c1e8aaba5e8ee154b34c6c3b17743d1c9b9a1ea \
+            59347b5b6032c2d61f7cbcecc9baf4754e8abb46cf88b10a3995b8769c161afc
+          build_soapy_module \
+            soapyredpitaya SoapyRedPitaya \
+            3d576f83b3bde52104b2a88150516ca8c9a78c7a \
+            6fff6293f7f23130c4ead6975f48396de50d7b769bfacfe75e6a48619c4585da
 
           SoapySDRUtil --check=remote
           SoapySDRUtil --check=rtlsdr
+          SoapySDRUtil --check=audio
+          SoapySDRUtil --check=hackrf
+          SoapySDRUtil --check=airspy
+          SoapySDRUtil --check=airspyhf
+          SoapySDRUtil --check=bladerf
+          SoapySDRUtil --check=redpitaya
 
       - name: Build optimized CubicSDR bundle
         shell: bash
@@ -117,6 +172,25 @@ jobs:
           app="${GITHUB_WORKSPACE}/build-clean/dist/CubicSDR.app"
           test -d "$app"
           codesign --verify --deep --strict "$app"
+
+          for module in \
+            libremoteSupport.so \
+            librtlsdrSupport.so \
+            libaudioSupport.so \
+            libHackRFSupport.so \
+            libairspySupport.so \
+            libairspyhfSupport.so \
+            libbladeRFSupport.so \
+            libRedPitaya.so; do
+            test -f "$app/Contents/MacOS/modules/$module" || {
+              echo "Missing bundled SoapySDR module: $module" >&2
+              exit 1
+            }
+          done
+
+          microphone_usage="$(/usr/libexec/PlistBuddy -c \
+            'Print :NSMicrophoneUsageDescription' "$app/Contents/Info.plist")"
+          test -n "$microphone_usage"
 
           while IFS= read -r candidate; do
             if file "$candidate" | grep -q "Mach-O"; then

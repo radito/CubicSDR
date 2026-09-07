@@ -32,6 +32,8 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>${MACOSX_BUNDLE_COPYRIGHT}</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>CubicSDR uses audio input devices when they are selected as an SDR source.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
