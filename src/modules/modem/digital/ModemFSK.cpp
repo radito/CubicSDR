@@ -20,7 +20,7 @@ int ModemFSK::checkSampleRate(long long sampleRate, int /* audioSampleRate */) {
     double minSps = pow(2.0,bps);
     double nextSps = (double(sampleRate) / double(sps));
     if (nextSps < minSps) {
-        return 2 * bps * sps;
+        return static_cast<int>(minSps * sps);
     } else {
         return (int)sampleRate;
     }

@@ -31,9 +31,7 @@ double ModemRange::maximum() const {
 
 ModemArgInfo::ModemArgInfo() = default;
 
-Modem::Modem() {
-    useSignalOutput(false);
-}
+Modem::Modem() : refreshKit(false), _useSignalOutput(false) {}
 
 Modem::~Modem() = default;
 

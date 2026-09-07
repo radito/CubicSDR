@@ -2,6 +2,8 @@ cmake_minimum_required (VERSION 2.8.12)
 
 project (CubicSDR)
 
+include(CTest)
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules/")
 
 SET(CUBICSDR_VERSION_MAJOR "0")
@@ -471,6 +473,7 @@ SET (cubicsdr_headers
     src/audio/AudioSinkFileThread.h
     src/audio/AudioFile.h
     src/audio/AudioFileWAV.h
+    src/dsp/SampleFrameAccumulator.h
     src/util/Gradient.h
     src/util/Timer.h
 	src/util/ThreadBlockingQueue.h
@@ -663,6 +666,7 @@ SOURCE_GROUP("Modem\\Digital" REGULAR_EXPRESSION "src/modules/modem/digital/${RE
 SOURCE_GROUP("Forms\\DigitalConsole" REGULAR_EXPRESSION "src/forms/DigitalConsole/${REG_EXT}")
 ENDIF()
 SOURCE_GROUP("Audio" REGULAR_EXPRESSION "src/audio/${REG_EXT}")
+SOURCE_GROUP("DSP" REGULAR_EXPRESSION "src/dsp/${REG_EXT}")
 SOURCE_GROUP("Utility" REGULAR_EXPRESSION "src/util/${REG_EXT}")
 SOURCE_GROUP("Visual" REGULAR_EXPRESSION "src/visual/${REG_EXT}")
 SOURCE_GROUP("Panel" REGULAR_EXPRESSION "src/panel/${REG_EXT}")
@@ -1167,4 +1171,8 @@ IF(UNIX AND NOT APPLE AND NOT BUILD_DEB)
     ADD_CUSTOM_TARGET(uninstall
       "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake") 
 
+ENDIF()
+
+IF(BUILD_TESTING)
+    ADD_SUBDIRECTORY(tests)
 ENDIF()

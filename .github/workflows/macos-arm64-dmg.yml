@@ -159,11 +159,20 @@ jobs:
             -G Ninja \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCUBICSDR_TEST_COVERAGE=ON \
             -DCMAKE_POLICY_DEFAULT_CMP0069=NEW \
             -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
             -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -mcpu=apple-m1" \
             -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -mcpu=apple-m1" \
             -DCMAKE_EXE_LINKER_FLAGS_RELEASE="-Wl,-dead_strip"
+
+      - name: Run unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ctest --test-dir build-clean --output-on-failure
+          cmake --build build-clean --target CubicSDRCoverage
 
       - name: Verify ARM64 application bundle
         shell: bash

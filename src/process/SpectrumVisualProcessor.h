@@ -5,6 +5,7 @@
 
 #include "VisualProcessor.h"
 #include "DemodDefs.h"
+#include "dsp/SampleFrameAccumulator.h"
 #include <cmath>
 #include <memory>
 
@@ -78,10 +79,9 @@ private:
     long lastBandwidth;
     bool lastView;
 
-    liquid_float_complex *fftInput, *fftOutput, *fftInData, *fftLastData;
+    liquid_float_complex *fftInput, *fftOutput, *fftInData;
     fftplan fftPlan;
-
-    unsigned int lastDataSize;
+    SampleFrameAccumulator<liquid_float_complex> fftFrames;
     
     double fft_ceil_ma, fft_ceil_maa;
     double fft_floor_ma, fft_floor_maa;

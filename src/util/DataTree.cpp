@@ -173,6 +173,7 @@ DataNode::DataNode(const char *name_in, DataNode &cloneFrom): parentNode(nullptr
         DataNode *cNode = cloneFrom.getNext();
         newChildCloneFrom(cNode->getName().c_str(), cNode);
     }
+    cloneFrom.rewind();
 }
 
 DataNode::DataNode(const char *name_in, DataElement &cloneFrom): parentNode(nullptr), ptr(0) {
@@ -235,32 +236,25 @@ DataNode *DataNode::newChildCloneFrom(const char *name_in, DataNode *cloneFrom) 
 
 
 DataNode *DataNode::child(const char *name_in, int index) {
-    DataNode *child_ret;
-
-    child_ret = childmap[name_in][index];
-
-    if (!child_ret) {
+    auto namedChildren = childmap.find(name_in);
+    if (index < 0 || namedChildren == childmap.end() ||
+        static_cast<size_t>(index) >= namedChildren->second.size()) {
         stringstream error_str;
         error_str << "no child '" << index << "' in DataNode '" << node_name << "'";
         throw(DataInvalidChildException(error_str.str().c_str()));
     }
 
-    return child_ret;
+    return namedChildren->second[static_cast<size_t>(index)];
 }
 
 DataNode *DataNode::child(int index) {
-
-    DataNode *child_ret;
-
-    child_ret = children[index];
-
-    if (!child_ret) {
+    if (index < 0 || static_cast<size_t>(index) >= children.size()) {
         stringstream error_str;
         error_str << "no child '" << index << "' in DataNode '" << node_name << "'";
         throw(DataInvalidChildException(error_str.str().c_str()));
     }
 
-    return child_ret;
+    return children[static_cast<size_t>(index)];
 }
 
 size_t DataNode::numChildren() {
@@ -388,7 +382,7 @@ void DataTree::decodeXMLText(DataNode *elem, const char *src_text, DT_FloatingPo
     vector<char> tmp_charvect;
     vector<int> tmp_intvect;
     vector<long> tmp_longvect;
-    vector<long> tmp_llongvect;
+    vector<long long> tmp_llongvect;
     
     vector<double> tmp_doublevect;
    
@@ -453,7 +447,7 @@ void DataTree::decodeXMLText(DataNode *elem, const char *src_text, DT_FloatingPo
             if (tmp_long != tmp_llong) {
                 vLongs = false;
             }
-            tmp_llongvect.push_back((long) tmp_long);
+            tmp_llongvect.push_back(tmp_llong);
         }
 
         if (vChars) {
@@ -851,7 +845,7 @@ void DataTree::nodeToXML(DataNode *elem, TiXmlElement *elxml) {
             tmp_stream.str("");
 
             for (tmp_uintvect_i = tmp_uintvect.begin(); tmp_uintvect_i != tmp_uintvect.end(); tmp_uintvect_i++) {
-                tmp_stream << (*tmp_intvect_i);
+                tmp_stream << (*tmp_uintvect_i);
                 if (tmp_uintvect_i != tmp_uintvect.end() - 1)
                     tmp_stream << " ";
             }
@@ -1083,6 +1077,4 @@ bool DataTree::SaveToFileXML(const std::string& filename) {
 
     return true;
 }
-
-
 

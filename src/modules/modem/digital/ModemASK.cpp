@@ -21,6 +21,7 @@ ModemBase *ModemASK::factory() {
 }
 
 ModemASK::~ModemASK() {
+    modemcf_destroy(demodASK2);
     modemcf_destroy(demodASK4);
     modemcf_destroy(demodASK8);
     modemcf_destroy(demodASK16);

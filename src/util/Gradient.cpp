@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 #include "Gradient.h"
+#include <algorithm>
 #include <cstddef>
 
 Gradient::Gradient() = default;
@@ -35,52 +36,40 @@ std::vector<float> &Gradient::getBlue() {
 }
 
 void Gradient::generate(unsigned int len) {
-    size_t chunk_size = len / (colors.size() - 1);
-
-    size_t p = 0;
     r_val.resize(len);
     g_val.resize(len);
     b_val.resize(len);
 
-    for (size_t j = 0, jMax = colors.size() - 1; j < jMax; j++) {
-        if ((chunk_size * (jMax)) < len && (j == jMax - 1)) {
-            chunk_size += len - chunk_size * (jMax);
-        }
+    if (len == 0) {
+        return;
+    }
 
-        for (size_t i = 0; i < chunk_size; i++) {
-            float idx = (float) (i) / (float) chunk_size;
+    if (colors.empty()) {
+        std::fill(r_val.begin(), r_val.end(), 0.0f);
+        std::fill(g_val.begin(), g_val.end(), 0.0f);
+        std::fill(b_val.begin(), b_val.end(), 0.0f);
+        return;
+    }
 
-            float r1 = colors[j].r;
-            float g1 = colors[j].g;
-            float b1 = colors[j].b;
+    if (colors.size() == 1 || len == 1) {
+        const float r = std::clamp(colors.front().r, 0.0f, 1.0f);
+        const float g = std::clamp(colors.front().g, 0.0f, 1.0f);
+        const float b = std::clamp(colors.front().b, 0.0f, 1.0f);
+        std::fill(r_val.begin(), r_val.end(), r);
+        std::fill(g_val.begin(), g_val.end(), g);
+        std::fill(b_val.begin(), b_val.end(), b);
+        return;
+    }
 
-            float r2 = colors[j + 1].r;
-            float g2 = colors[j + 1].g;
-            float b2 = colors[j + 1].b;
+    const float segmentCount = static_cast<float>(colors.size() - 1);
+    for (size_t i = 0; i < len; ++i) {
+        const float position = static_cast<float>(i) * segmentCount / static_cast<float>(len - 1);
+        const size_t segment = std::min(static_cast<size_t>(position), colors.size() - 2);
+        const float amount = position - static_cast<float>(segment);
 
-            float r = r1 + (r2 - r1) * idx;
-            float g = g1 + (g2 - g1) * idx;
-            float b = b1 + (b2 - b1) * idx;
-
-            if (r < 0.0)
-                r = 0.0;
-            if (r > 1.0)
-                r = 1.0;
-            if (g < 0.0)
-                g = 0.0;
-            if (g > 1.0)
-                g = 1.0;
-            if (b < 0.0)
-                b = 0.0;
-            if (b > 1.0)
-                b = 1.0;
-
-            r_val[p] = r;
-            g_val[p] = g;
-            b_val[p] = b;
-
-            p++;
-        }
+        r_val[i] = std::clamp(colors[segment].r + (colors[segment + 1].r - colors[segment].r) * amount, 0.0f, 1.0f);
+        g_val[i] = std::clamp(colors[segment].g + (colors[segment + 1].g - colors[segment].g) * amount, 0.0f, 1.0f);
+        b_val[i] = std::clamp(colors[segment].b + (colors[segment + 1].b - colors[segment].b) * amount, 0.0f, 1.0f);
     }
 }
 

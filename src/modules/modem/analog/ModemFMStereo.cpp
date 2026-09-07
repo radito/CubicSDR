@@ -169,9 +169,11 @@ void ModemFMStereo::disposeKit(ModemKit *kit) {
     firfilt_rrrf_destroy(fmkit->firStereoRight);
     firhilbf_destroy(fmkit->firStereoR2C);
     firhilbf_destroy(fmkit->firStereoC2R);
+    iirfilt_crcf_destroy(fmkit->iirStereoPilot);
     nco_crcf_destroy(fmkit->stereoPilot);
     if (fmkit->iirDemphR) { iirfilt_rrrf_destroy(fmkit->iirDemphR); }
     if (fmkit->iirDemphL) { iirfilt_rrrf_destroy(fmkit->iirDemphL); }
+    delete fmkit;
 }
 
 
@@ -179,6 +181,10 @@ void ModemFMStereo::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInp
     auto *fmkit = (ModemKitFMStereo *)kit;
     size_t bufSize = input->data.size();
     liquid_float_complex u, v, w, x, y;
+
+    if (bufSize == 0) {
+        return;
+    }
     
     double audio_resample_ratio = fmkit->audioResampleRatio;
     
@@ -256,6 +262,7 @@ void ModemFMStereo::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInp
     msresamp_rrrf_execute(fmkit->stereoResampler, &demodStereoData[0], (int)bufSize, &resampledStereoData[0], &numAudioWritten);
     
     audioOut->channels = 2;
+    audioOut->sampleRate = fmkit->audioSampleRate;
     if (audioOut->data.capacity() < (numAudioWritten * 2)) {
         audioOut->data.reserve(numAudioWritten * 2);
     }

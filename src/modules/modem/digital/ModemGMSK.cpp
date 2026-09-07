@@ -121,14 +121,14 @@ void ModemGMSK::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput *
 
     dkit->inputBuffer.insert(dkit->inputBuffer.end(),input->data.begin(),input->data.end());
 
-    int numProcessed = 0;
-    for (size_t i = 0, iMax = dkit->inputBuffer.size()/dkit->sps; i < iMax; i+= dkit->sps) {
-        gmskdem_demodulate(dkit->demodGMSK, &input->data[i],&sym_out);
+    const size_t symbolCount = dkit->inputBuffer.size() / dkit->sps;
+    for (size_t i = 0; i < symbolCount; ++i) {
+        gmskdem_demodulate(dkit->demodGMSK, &dkit->inputBuffer[i * dkit->sps], &sym_out);
         outStream << sym_out;
-        numProcessed += dkit->sps;
     }
-    
-    dkit->inputBuffer.erase(dkit->inputBuffer.begin(),dkit->inputBuffer.begin()+numProcessed);
+
+    const size_t numProcessed = symbolCount * dkit->sps;
+    dkit->inputBuffer.erase(dkit->inputBuffer.begin(), dkit->inputBuffer.begin() + numProcessed);
     
     digitalFinish(dkit, nullptr);
 }

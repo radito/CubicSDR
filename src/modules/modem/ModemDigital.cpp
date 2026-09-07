@@ -6,7 +6,7 @@
 
 ModemDigitalOutput::ModemDigitalOutput() = default;
 
-ModemDigital::ModemDigital() : Modem() {
+ModemDigital::ModemDigital() : Modem(), currentDemodLock(false) {
 #if ENABLE_DIGITAL_LAB
     digitalOut = nullptr;
 #endif

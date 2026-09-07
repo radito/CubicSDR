@@ -8,6 +8,24 @@ Cross-Platform Software-Defined Radio Application
 - Manual is available at [cubicsdr.readthedocs.io](http://cubicsdr.readthedocs.io).
 - Manual contributions can be submitted to the [CubicSDR-Manual](https://github.com/cjcliffe/CubicSDR-Manual) repository.
 
+Unit tests
+----------
+
+Tests are built by default through CMake's `BUILD_TESTING` option and do not require SDR hardware or a graphical session. After configuring and building, run:
+
+    ctest --test-dir build-clean --output-on-failure
+
+To build only the test executable:
+
+    cmake --build build-clean --target CubicSDRTests
+
+Clang builds can also generate a terminal summary and browsable HTML coverage report:
+
+    cmake -S . -B build-coverage -DCUBICSDR_TEST_COVERAGE=ON
+    cmake --build build-coverage --target CubicSDRCoverage
+
+The HTML report is written to `build-coverage/tests/coverage/index.html`.
+
 Utilizes: 
 --------
   - liquid-dsp (http://liquidsdr.org/ -- https://github.com/jgaeddert/liquid-dsp)
