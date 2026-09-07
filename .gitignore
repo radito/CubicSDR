@@ -1,4 +1,5 @@
 build/
+build-clean/
 cmake_build/
 dist/
 .DS_Store

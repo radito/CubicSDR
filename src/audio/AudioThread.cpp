@@ -3,6 +3,7 @@
 
 #include "AudioThread.h"
 #include <algorithm>
+#include <cmath>
 #include <mutex>
 #include <vector>
 #include "CubicSDR.h"
@@ -10,8 +11,6 @@
 
 //50 ms
 #define HEARTBEAT_CHECK_PERIOD_MICROS (50 * 1000)
-#define RNNOISE_SAMPLE 480
-#define RNNOISE_NBUFFER RNNOISE_SAMPLE
 
 std::map<int, AudioThread*> AudioThread::deviceController;
 
@@ -19,7 +18,7 @@ std::map<int, int> AudioThread::deviceSampleRate;
 
 std::recursive_mutex AudioThread::m_device_mutex;
 
-AudioThread::AudioThread() : IOThread(), nBufferFrames(RNNOISE_NBUFFER), sampleRate(0), controllerThread(nullptr) {
+AudioThread::AudioThread() : IOThread(), nBufferFrames(RNNOISE_FRAME_SIZE), sampleRate(0), controllerThread(nullptr) {
 
   audioQueuePtr = 0;
   underflowCount = 0;
@@ -27,7 +26,7 @@ AudioThread::AudioThread() : IOThread(), nBufferFrames(RNNOISE_NBUFFER), sampleR
   outputDevice.store(-1);
   gain = 1.0;
 
-  st = rnnoise_create(NULL);
+  playbackQueue.set_max_num_items(16);
   debug = 255;
 
   cout << "Initialize AudioThread" << std::endl;
@@ -95,14 +94,10 @@ static int audioCallback(void* outputBuffer, void* /* inputBuffer */, unsigned i
                          void* userData) {
   float* out = (float*)outputBuffer;
 
-  //Zero output buffer in all cases: this allow to mute audio if no AudioThread data is
-  //actually active.
+  // Zero output in all cases so inactive or starved demodulators are silent.
   ::memset(out, 0, nBufferFrames * 2 * sizeof(float));
 
-  //src in the controller thread:
   auto* src = (AudioThread*)userData;
-
-  //by construction, src is a controller thread, from deviceController:
   std::lock_guard<std::recursive_mutex> lock(src->getMutex());
 
   if (src->isTerminated()) {
@@ -115,139 +110,81 @@ static int audioCallback(void* outputBuffer, void* /* inputBuffer */, unsigned i
 
   double peak = 0.0;
 
-  //Process the bound threads audio:
-  for (size_t j = 0; j < src->boundThreads.size(); j++) {
-
-    AudioThread* srcmix = src->boundThreads[j];
-
-    //lock every single boundThread srcmix in succession the time we process
-    //its audio samples.
+  // RNNoise has already run on each bound AudioThread. This real-time callback
+  // only consumes prepared audio and mixes it for the output device.
+  for (AudioThread* srcmix : src->boundThreads) {
     std::lock_guard<std::recursive_mutex> lock(srcmix->getMutex());
 
-    if (srcmix->isTerminated() || !srcmix->inputQueue || srcmix->inputQueue->empty() || !srcmix->isActive()) {
+    if (srcmix->isTerminated() || !srcmix->isActive()) {
       continue;
     }
 
-    if (!srcmix->currentInput) {
-      srcmix->audioQueuePtr = 0;
+    const int outputSampleRate = src->getSampleRate();
+    double mixPeak = 0.0;
 
-      if (!srcmix->inputQueue->try_pop(srcmix->currentInput)) {
-        continue;
-      }
-
-      continue;
-    }
-
-    if (srcmix->currentInput->sampleRate != src->getSampleRate()) {
-
-      while (srcmix->inputQueue->try_pop(srcmix->currentInput)) {
-
-        if (srcmix->currentInput) {
-          if (srcmix->currentInput->sampleRate == src->getSampleRate()) {
-            break;
-          }
+    // Continue consuming currentInput even when playbackQueue is empty. The
+    // previous code stranded unread samples unless another packet was queued.
+    auto loadInput = [&](int expectedChannels, size_t samplesNeeded) {
+      while (true) {
+        if (srcmix->currentInput &&
+            srcmix->currentInput->sampleRate == outputSampleRate &&
+            (srcmix->currentInput->channels == 1 || srcmix->currentInput->channels == 2) &&
+            (expectedChannels == 0 || srcmix->currentInput->channels == expectedChannels) &&
+            srcmix->audioQueuePtr + samplesNeeded <= srcmix->currentInput->data.size()) {
+          mixPeak = std::max(mixPeak, static_cast<double>(srcmix->currentInput->peak * srcmix->gain));
+          return true;
         }
-        srcmix->currentInput = nullptr;
-      }  //end while
 
-      srcmix->audioQueuePtr = 0;
+        // Let the next callback switch paths if mono/stereo layout changes.
+        if (srcmix->currentInput && expectedChannels != 0 &&
+            srcmix->currentInput->sampleRate == outputSampleRate &&
+            srcmix->currentInput->channels != expectedChannels &&
+            srcmix->audioQueuePtr < srcmix->currentInput->data.size()) {
+          return false;
+        }
 
-      if (!srcmix->currentInput) {
-        continue;
-      }
-    }
-
-    if (srcmix->currentInput->channels == 0 || srcmix->currentInput->data.empty()) {
-      if (!srcmix->inputQueue->empty()) {
         srcmix->audioQueuePtr = 0;
-        if (srcmix->currentInput) {
-
-          srcmix->currentInput = nullptr;
-        }
-
-        if (!srcmix->inputQueue->try_pop(srcmix->currentInput)) {
-          continue;
+        srcmix->currentInput = nullptr;
+        if (!srcmix->playbackQueue.try_pop(srcmix->currentInput)) {
+          return false;
         }
       }
+    };
+
+    if (!loadInput(0, 1)) {
       continue;
     }
 
-    double mixPeak = srcmix->currentInput->peak * srcmix->gain;
+    bool mixedAudio = false;
 
     if (srcmix->currentInput->channels == 1) {
-      float rnnBuf[RNNOISE_NBUFFER];
-      bool denoise = srcmix->currentInput->is_denoised;
-
       for (unsigned int i = 0; i < nBufferFrames; i++) {
-
-        if (srcmix->audioQueuePtr >= srcmix->currentInput->data.size()) {
-          srcmix->audioQueuePtr = 0;
-          if (srcmix->currentInput) {
-
-            srcmix->currentInput = nullptr;
-          }
-
-          if (!srcmix->inputQueue->try_pop(srcmix->currentInput)) {
-            break;
-          }
-
-          double srcPeak = srcmix->currentInput->peak * srcmix->gain;
-
-          if (mixPeak < srcPeak) {
-            mixPeak = srcPeak;
-          }
+        if (!loadInput(1, 1)) {
+          break;
         }
 
-        // cout << "nBufferFrame: "<< i << " | AudioQueuePtr: " << srcmix->audioQueuePtr << endl;
-
-        if (srcmix->currentInput && !srcmix->currentInput->data.empty()) {
-          float v = srcmix->currentInput->data[srcmix->audioQueuePtr] * srcmix->gain;
-
-          rnnBuf[i] = denoise ? (v * 32767.0f) : v;
-        }
-
+        float data = srcmix->currentInput->data[srcmix->audioQueuePtr] * srcmix->gain;
         srcmix->audioQueuePtr++;
-      }
-
-      if (denoise) {
-        rnnoise_process_frame(srcmix->st, rnnBuf, rnnBuf);
-      }
-
-      for (unsigned int i = 0; i < nBufferFrames; i++) {
-        float data = denoise ? (rnnBuf[i] / 32767.0f) : rnnBuf[i];
-
         out[i * 2] += data;
         out[i * 2 + 1] += data;
+        mixedAudio = true;
       }
-
     } else {
-      for (unsigned int i = 0, iMax = srcmix->currentInput->channels * nBufferFrames; i < iMax; i++) {
-
-        if (srcmix->audioQueuePtr >= srcmix->currentInput->data.size()) {
-          srcmix->audioQueuePtr = 0;
-          if (srcmix->currentInput) {
-
-            srcmix->currentInput = nullptr;
-          }
-
-          if (!srcmix->inputQueue->try_pop(srcmix->currentInput)) {
-            break;
-          }
-
-          double srcPeak = srcmix->currentInput->peak * srcmix->gain;
-          if (mixPeak < srcPeak) {
-            mixPeak = srcPeak;
-          }
+      for (unsigned int i = 0; i < nBufferFrames; i++) {
+        if (!loadInput(2, 2)) {
+          break;
         }
-        if (srcmix->currentInput && !srcmix->currentInput->data.empty()) {
 
-          out[i] = out[i] + srcmix->currentInput->data[srcmix->audioQueuePtr] * srcmix->gain;
-        }
-        srcmix->audioQueuePtr++;
+        out[i * 2] += srcmix->currentInput->data[srcmix->audioQueuePtr] * srcmix->gain;
+        out[i * 2 + 1] += srcmix->currentInput->data[srcmix->audioQueuePtr + 1] * srcmix->gain;
+        srcmix->audioQueuePtr += 2;
+        mixedAudio = true;
       }
     }
 
-    peak += mixPeak;
+    if (mixedAudio) {
+      peak += mixPeak;
+    }
   }
 
   //normalize volume
@@ -342,6 +279,7 @@ void AudioThread::setDeviceSampleRate(int deviceId, int sampleRate) {
 void AudioThread::setSampleRate(int sampleRate_in) {
 
   bool thisIsAController = false;
+  bool resetDenoise = false;
 
   //scope lock here to minimize the common unique static lock contention
   {
@@ -353,32 +291,38 @@ void AudioThread::setSampleRate(int sampleRate_in) {
     }
   }
 
-  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+  {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    resetDenoise = !thisIsAController && sampleRate != sampleRate_in;
 
-  if (thisIsAController) {
+    if (thisIsAController) {
+      dac.stopStream();
+      dac.closeStream();
 
-    dac.stopStream();
-    dac.closeStream();
-
-    //Set bounded sample rate:
-    for (auto srcmix : boundThreads) {
-      srcmix->setSampleRate(sampleRate_in);
-    }
-
-    //make a local copy, snapshot of the list of demodulators
-    std::vector<DemodulatorInstancePtr> demodulators = wxGetApp().getDemodMgr().getDemodulators();
-
-    for (const auto& demod : demodulators) {
-      if (demod->getOutputDevice() == outputDevice.load()) {
-        demod->setAudioSampleRate(sampleRate_in);
+      //Set bounded sample rate:
+      for (auto srcmix : boundThreads) {
+        srcmix->setSampleRate(sampleRate_in);
       }
+
+      //make a local copy, snapshot of the list of demodulators
+      std::vector<DemodulatorInstancePtr> demodulators = wxGetApp().getDemodMgr().getDemodulators();
+
+      for (const auto& demod : demodulators) {
+        if (demod->getOutputDevice() == outputDevice.load()) {
+          demod->setAudioSampleRate(sampleRate_in);
+        }
+      }
+
+      dac.openStream(&parameters, nullptr, RTAUDIO_FLOAT32, sampleRate_in, &nBufferFrames, &audioCallback, (void*)this, &opts);
+      dac.startStream();
     }
 
-    dac.openStream(&parameters, nullptr, RTAUDIO_FLOAT32, sampleRate_in, &nBufferFrames, &audioCallback, (void*)this, &opts);
-    dac.startStream();
+    sampleRate = sampleRate_in;
   }
 
-  sampleRate = sampleRate_in;
+  if (resetDenoise) {
+    setDenoiseEnabled(denoiseEnabled.load());
+  }
 }
 
 int AudioThread::getSampleRate() {
@@ -498,25 +442,35 @@ void AudioThread::run() {
     return;
   }
 
+  inputQueue = std::static_pointer_cast<AudioThreadInputQueue>(getInputQueue("AudioDataInput"));
+
   setupDevice((outputDevice.load() == -1) ? (dac.getDefaultOutputDevice()) : outputDevice.load());
 
   //    std::cout << "Audio thread started." << std::endl;
 
-  inputQueue = std::static_pointer_cast<AudioThreadInputQueue>(getInputQueue("AudioDataInput"));
-
-  //Infinite loop, witing for commands or for termination
-  while (!stopping) {
-    AudioThreadCommand command;
-
-    if (!cmdQueue.pop(command, HEARTBEAT_CHECK_PERIOD_MICROS)) {
-      continue;
-    }
-
+  auto handleCommand = [this](const AudioThreadCommand& command) {
     if (command.cmdType == AudioThreadCommand::Type::AUDIO_THREAD_CMD_SET_DEVICE) {
       setupDevice(command.int_value);
-    }
-    if (command.cmdType == AudioThreadCommand::Type::AUDIO_THREAD_CMD_SET_SAMPLE_RATE) {
+    } else if (command.cmdType == AudioThreadCommand::Type::AUDIO_THREAD_CMD_SET_SAMPLE_RATE) {
       setSampleRate(command.int_value);
+    }
+  };
+
+  // Bound audio threads prepare playback data here. The controller has no
+  // input queue and only services output-device commands.
+  while (!stopping) {
+    AudioThreadCommand command;
+    while (cmdQueue.try_pop(command)) {
+      handleCommand(command);
+    }
+
+    if (inputQueue) {
+      AudioThreadInputPtr input;
+      if (inputQueue->pop(input, 5000)) {
+        processAudioInput(input);
+      }
+    } else if (cmdQueue.pop(command, HEARTBEAT_CHECK_PERIOD_MICROS)) {
+      handleCommand(command);
     }
   }  //end while
 
@@ -524,6 +478,7 @@ void AudioThread::run() {
   if (inputQueue != nullptr) {
     inputQueue->flush();
   }
+  playbackQueue.flush();
 
   //Nullify currentInput...
   currentInput = nullptr;
@@ -559,9 +514,21 @@ void AudioThread::run() {
 }
 
 void AudioThread::terminate() {
-  rnnoise_destroy(st);
-
   IOThread::terminate();
+  denoiseEnabled.store(false);
+
+  {
+    std::lock_guard<std::mutex> lock(denoiseMutex);
+    resetDenoiseProcessorLocked();
+  }
+
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+  if (inputQueue) {
+    inputQueue->flush();
+  }
+  playbackQueue.flush();
+  currentInput = nullptr;
+  audioQueuePtr = 0;
 }
 
 bool AudioThread::isActive() {
@@ -573,8 +540,6 @@ bool AudioThread::isActive() {
 void AudioThread::setActive(bool state) {
 
   AudioThread* matchingControllerThread = nullptr;
-
-  std::lock_guard<std::recursive_mutex> lock(m_mutex);
 
   //scope lock here to minimize the common unique static lock contention
   {
@@ -590,17 +555,29 @@ void AudioThread::setActive(bool state) {
     return;
   }
 
-  if (state && !active && inputQueue) {
+  const bool wasActive = active.load();
+
+  // Never take the controller lock while holding this bound thread's lock:
+  // audioCallback takes them in the opposite (controller -> bound) order.
+  if (state && !wasActive && inputQueue) {
     matchingControllerThread->bindThread(this);
-  } else if (!state && active) {
-    matchingControllerThread->removeThread(this);
   }
 
-  // Activity state changing, clear any inputs
-  if (inputQueue) {
-    inputQueue->flush();
+  {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    // Activity state changing, clear any inputs.
+    if (inputQueue) {
+      inputQueue->flush();
+    }
+    playbackQueue.flush();
+    currentInput = nullptr;
+    audioQueuePtr = 0;
+    active = state;
   }
-  active = state;
+
+  if (!state && wasActive) {
+    matchingControllerThread->removeThread(this);
+  }
 }
 
 AudioThreadCommandQueue* AudioThread::getCommandQueue() {
@@ -615,5 +592,172 @@ void AudioThread::setGain(float gain_in) {
   if (gain_in > 2.0) {
     gain_in = 2.0;
   }
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   gain = gain_in;
+}
+
+void AudioThread::setDenoiseEnabled(bool enabled) {
+  denoiseEnabled.store(enabled);
+
+  {
+    std::lock_guard<std::mutex> lock(denoiseMutex);
+    resetDenoiseProcessorLocked();
+    if (enabled) {
+      denoiseState = rnnoise_create(nullptr);
+    }
+  }
+
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+  if (inputQueue) {
+    inputQueue->flush();
+  }
+  playbackQueue.flush();
+  currentInput = nullptr;
+  audioQueuePtr = 0;
+}
+
+void AudioThread::resetDenoiseProcessorLocked() {
+  if (denoiseState != nullptr) {
+    rnnoise_destroy(denoiseState);
+    denoiseState = nullptr;
+  }
+  if (denoiseInputResampler != nullptr) {
+    msresamp_rrrf_destroy(denoiseInputResampler);
+    denoiseInputResampler = nullptr;
+  }
+  if (denoiseOutputResampler != nullptr) {
+    msresamp_rrrf_destroy(denoiseOutputResampler);
+    denoiseOutputResampler = nullptr;
+  }
+  denoiseFrame.fill(0.0f);
+  denoiseFrameFill = 0;
+  denoiseProcessorSampleRate = 0;
+  denoiseModelInput.clear();
+  denoiseModelOutput.clear();
+}
+
+void AudioThread::queuePlaybackInput(const AudioThreadInputPtr& input) {
+  if (!input) {
+    return;
+  }
+
+  if (!playbackQueue.try_push(input)) {
+    AudioThreadInputPtr dropped;
+    playbackQueue.try_pop(dropped);
+    playbackQueue.try_push(input);
+  }
+}
+
+void AudioThread::processAudioInput(const AudioThreadInputPtr& input) {
+  if (!input) {
+    return;
+  }
+
+  if (!denoiseEnabled.load() || input->channels != 1) {
+    queuePlaybackInput(input);
+    return;
+  }
+
+  if (input->sampleRate <= 0 || input->data.empty()) {
+    queuePlaybackInput(input);
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(denoiseMutex);
+  if (!denoiseEnabled.load()) {
+    queuePlaybackInput(input);
+    return;
+  }
+  // RNNoise is fixed at 480 samples/48 kHz. Keep streaming resamplers on both
+  // sides so changing CubicSDR's audio rate does not disable denoising.
+  if (denoiseProcessorSampleRate != input->sampleRate) {
+    resetDenoiseProcessorLocked();
+    denoiseProcessorSampleRate = input->sampleRate;
+    denoiseState = rnnoise_create(nullptr);
+    if (input->sampleRate != 48000) {
+      constexpr float stopBandAttenuation = 60.0f;
+      denoiseInputResampler = msresamp_rrrf_create(48000.0f / input->sampleRate, stopBandAttenuation);
+      denoiseOutputResampler = msresamp_rrrf_create(input->sampleRate / 48000.0f, stopBandAttenuation);
+    }
+  }
+
+  if (denoiseState == nullptr ||
+      (input->sampleRate != 48000 &&
+       (denoiseInputResampler == nullptr || denoiseOutputResampler == nullptr))) {
+    queuePlaybackInput(input);
+    return;
+  }
+
+  float* modelInput = input->data.data();
+  size_t modelInputSize = input->data.size();
+  if (denoiseInputResampler != nullptr) {
+    const unsigned int outputCapacity =
+        msresamp_rrrf_get_num_output(denoiseInputResampler, static_cast<unsigned int>(input->data.size()));
+    denoiseModelInput.resize(outputCapacity);
+    unsigned int samplesWritten = 0;
+    msresamp_rrrf_execute(denoiseInputResampler,
+                          input->data.data(),
+                          static_cast<unsigned int>(input->data.size()),
+                          denoiseModelInput.data(),
+                          &samplesWritten);
+    denoiseModelInput.resize(samplesWritten);
+    modelInput = denoiseModelInput.data();
+    modelInputSize = denoiseModelInput.size();
+  }
+
+  AudioThreadInputPtr output = denoiseOutputBuffers.getBuffer();
+  output->frequency = input->frequency;
+  output->inputRate = input->inputRate;
+  output->sampleRate = input->sampleRate;
+  output->channels = 1;
+  output->type = input->type;
+  output->is_squelch_active = input->is_squelch_active;
+  output->is_denoised = true;
+  output->data.clear();
+  output->dataOut.clear();
+
+  const size_t completedFrames = (denoiseFrameFill + modelInputSize) / RNNOISE_FRAME_SIZE;
+  std::vector<float>* modelOutput = &output->data;
+  if (denoiseOutputResampler != nullptr) {
+    denoiseModelOutput.clear();
+    modelOutput = &denoiseModelOutput;
+  }
+  modelOutput->reserve(completedFrames * RNNOISE_FRAME_SIZE);
+
+  for (size_t i = 0; i < modelInputSize; i++) {
+    denoiseFrame[denoiseFrameFill++] = modelInput[i] * 32767.0f;
+    if (denoiseFrameFill == RNNOISE_FRAME_SIZE) {
+      rnnoise_process_frame(denoiseState, denoiseFrame.data(), denoiseFrame.data());
+      for (float denoisedSample : denoiseFrame) {
+        modelOutput->push_back(denoisedSample / 32767.0f);
+      }
+      denoiseFrameFill = 0;
+    }
+  }
+
+  if (modelOutput->empty()) {
+    return;
+  }
+
+  if (denoiseOutputResampler != nullptr) {
+    const unsigned int outputCapacity =
+        msresamp_rrrf_get_num_output(denoiseOutputResampler, static_cast<unsigned int>(modelOutput->size()));
+    output->data.resize(outputCapacity);
+    unsigned int samplesWritten = 0;
+    msresamp_rrrf_execute(denoiseOutputResampler,
+                          modelOutput->data(),
+                          static_cast<unsigned int>(modelOutput->size()),
+                          output->data.data(),
+                          &samplesWritten);
+    output->data.resize(samplesWritten);
+    if (output->data.empty()) {
+      return;
+    }
+  }
+
+  output->peak = 0.0f;
+  for (float sample : output->data) {
+    output->peak = std::max(output->peak, std::abs(sample));
+  }
+  queuePlaybackInput(output);
 }

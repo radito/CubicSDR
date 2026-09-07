@@ -137,6 +137,9 @@ public:
     
     void setManualDevices(std::vector<SDRManualDef> manuals);
     std::vector<SDRManualDef> getManualDevices();
+
+    void setRemoteDevices(std::vector<std::string> remotes);
+    std::vector<std::string> getRemoteDevices();
     
     void setMainSplit(float value);
     float getMainSplit();
@@ -206,6 +209,7 @@ private:
     std::atomic<float> spectrumAvgSpeed{}, mainSplit{}, visSplit{}, bookmarkSplit{};
     std::atomic_int dbOffset{};
     std::vector<SDRManualDef> manualDevices;
+    std::vector<std::string> remoteDevices;
     std::atomic_bool bookmarksVisible{};
 
     std::atomic<PerfModeEnum> perfMode{};

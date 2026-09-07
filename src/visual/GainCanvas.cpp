@@ -259,6 +259,15 @@ bool GainCanvas::updateGainValues() {
 		return false;
 	}
 
+	// GainCanvas::OnIdle runs on the main UI thread. Querying a remote
+	// device here performs several synchronous SoapyRemote RPCs and blocks
+	// all input and painting for at least one network round trip per query.
+	// The gain panels already reflect user changes locally, so skip this
+	// continuous hardware readback for remote devices.
+	if (devInfo->isRemote()) {
+		return false;
+	}
+
 	DeviceConfig *devConfig = wxGetApp().getConfig()->getDevice(devInfo->getDeviceId());
 
 	gains = devInfo->getGains(SOAPY_SDR_RX, 0);
@@ -312,4 +321,3 @@ void GainCanvas::setThemeColors() {
 
     Refresh();
 }
-

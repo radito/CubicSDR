@@ -18,6 +18,7 @@
 #include "CubicSDR.h"
 
 #ifdef _OSX_APP_
+#include <ApplicationServices/ApplicationServices.h>
 #include <IOKit/pwr_mgt/IOPMLib.h>
 #include "CoreFoundation/CoreFoundation.h"
 
@@ -199,7 +200,14 @@ class ActionDialogRigError : public ActionDialog {
   void doClickOK() override {}
 };
 
-CubicSDR::CubicSDR() : frequency(0), offset(0), ppm(0), snap(1), sampleRate(DEFAULT_SAMPLE_RATE), agcMode(false) {
+CubicSDR::CubicSDR()
+    : frequency(0),
+      offset(0),
+      ppm(0),
+      snap(1),
+      sampleRate(DEFAULT_SAMPLE_RATE),
+      agcMode(false),
+      denoiseMode(false) {
   config.load();
 
   sampleRateInitialized.store(false);
@@ -393,9 +401,18 @@ bool CubicSDR::OnInit() {
   sdrEnum = new SDREnumerator();
 
   SDREnumerator::setManuals(config.getManualDevices());
+  SDREnumerator::setRemotes(config.getRemoteDevices());
 
   appframe = new AppFrame();
+  SetTopWindow(appframe);
   t_SDREnum = new std::thread(&SDREnumerator::threadMain, sdrEnum);
+  // AppFrame's constructor has returned, so appframe is now a valid parent for
+  // the selector. Opening it from inside AppFrame's constructor races the
+  // assignment above and is rejected by deviceSelector()'s lifetime guard.
+  CallAfter([this]() {
+    deviceSelector();
+    bringToFront();
+  });
 
   //#ifdef __APPLE__
   //    int main_policy;
@@ -422,6 +439,50 @@ bool CubicSDR::OnInit() {
 
   return true;
 }
+
+void CubicSDR::bringToFront() {
+  if (shuttingDown.load() || !appframe || appframe->IsBeingDeleted()) {
+    return;
+  }
+
+#ifdef _OSX_APP_
+  // A bundle executable started directly from Terminal is not always made the
+  // active application by LaunchServices. Promote and activate this process
+  // before raising its wxWidgets windows.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  ProcessSerialNumber processSerialNumber{};
+  if (GetCurrentProcess(&processSerialNumber) == noErr) {
+    TransformProcessType(&processSerialNumber, kProcessTransformToForegroundApplication);
+    SetFrontProcess(&processSerialNumber);
+  }
+#pragma clang diagnostic pop
+#endif
+
+  if (appframe->IsIconized()) {
+    appframe->Iconize(false);
+  }
+  appframe->Show(true);
+  appframe->Raise();
+
+  // Keep the startup device selector above the main frame when it is open.
+  if (deviceSelectorOpen.load() && deviceSelectorDialog &&
+      !deviceSelectorDialog->IsBeingDeleted() && deviceSelectorDialog->IsShown()) {
+    if (deviceSelectorDialog->IsIconized()) {
+      deviceSelectorDialog->Iconize(false);
+    }
+    deviceSelectorDialog->Raise();
+    deviceSelectorDialog->SetFocus();
+  } else {
+    appframe->SetFocus();
+  }
+}
+
+#ifdef __APPLE__
+void CubicSDR::MacReopenApp() {
+  bringToFront();
+}
+#endif
 
 int CubicSDR::OnExit() {
   shuttingDown.store(true);
@@ -583,13 +644,18 @@ bool CubicSDR::OnCmdLineParsed(wxCmdLineParser& parser) {
 }
 
 void CubicSDR::closeDeviceSelector() {
-  if (deviceSelectorOpen) {
+  if (deviceSelectorOpen.load() && deviceSelectorDialog &&
+      !deviceSelectorDialog->IsBeingDeleted()) {
     deviceSelectorDialog->Close();
   }
 }
 
 void CubicSDR::deviceSelector() {
-  if (deviceSelectorOpen) {
+  if (shuttingDown.load() || !appframe || appframe->IsBeingDeleted()) {
+    return;
+  }
+  if (deviceSelectorOpen.load() && deviceSelectorDialog &&
+      !deviceSelectorDialog->IsBeingDeleted()) {
     deviceSelectorDialog->Raise();
     deviceSelectorDialog->SetFocus();
     return;
@@ -606,12 +672,16 @@ void CubicSDR::deviceSelector() {
 
 void CubicSDR::addRemote(const std::string& remoteAddr) {
   SDREnumerator::addRemote(remoteAddr);
+  config.setRemoteDevices(SDREnumerator::getRemotes());
+  config.save();
   devicesReady.store(false);
   t_SDREnum = new std::thread(&SDREnumerator::threadMain, sdrEnum);
 }
 
 void CubicSDR::removeRemote(const std::string& remoteAddr) {
   SDREnumerator::removeRemote(remoteAddr);
+  config.setRemoteDevices(SDREnumerator::getRemotes());
+  config.save();
 }
 
 void CubicSDR::sdrThreadNotify(SDRThread::SDRThreadState state, const std::string& message) {
@@ -750,11 +820,20 @@ void CubicSDR::setSampleRate(long long rate_in) {
   }
 }
 
-void CubicSDR::stopDevice(bool store, int waitMsForTermination) {
+bool CubicSDR::stopDevice(bool store, int waitMsForTermination) {
 
   //First we must stop the threads
   sdrThread->terminate();
-  sdrThread->isTerminated(waitMsForTermination);
+  const bool terminated = sdrThread->isTerminated(waitMsForTermination);
+
+  // Never perform an unbounded join on the GUI thread. If a third-party
+  // driver ignores its read timeout, leave the worker intact so a later stop
+  // attempt can reap it after it exits.
+  if (t_SDR && !terminated) {
+    sdrThreadNotify(SDRThread::SDR_THREAD_FAILED,
+                    std::string("SDR device is still stopping; please retry."));
+    return false;
+  }
 
   if (t_SDR) {
     t_SDR->join();
@@ -770,6 +849,7 @@ void CubicSDR::stopDevice(bool store, int waitMsForTermination) {
   }
 
   sdrThread->setDevice(nullptr);
+  return true;
 }
 
 void CubicSDR::reEnumerateDevices() {
@@ -779,10 +859,16 @@ void CubicSDR::reEnumerateDevices() {
   t_SDREnum = new std::thread(&SDREnumerator::threadMain, sdrEnum);
 }
 
-void CubicSDR::setDevice(SDRDeviceInfo* dev, int waitMsForTermination) {
+bool CubicSDR::setDevice(SDRDeviceInfo* dev, int waitMsForTermination) {
 
   sdrThread->terminate();
-  sdrThread->isTerminated(waitMsForTermination);
+  const bool terminated = sdrThread->isTerminated(waitMsForTermination);
+
+  if (t_SDR && !terminated) {
+    sdrThreadNotify(SDRThread::SDR_THREAD_FAILED,
+                    std::string("Previous SDR device is still stopping; please retry."));
+    return false;
+  }
 
   if (t_SDR) {
     t_SDR->join();
@@ -829,6 +915,7 @@ void CubicSDR::setDevice(SDRDeviceInfo* dev, int waitMsForTermination) {
   }
 
   stoppedDev = nullptr;
+  return true;
 }
 
 SDRDeviceInfo* CubicSDR::getDevice() {
@@ -1029,6 +1116,9 @@ std::string CubicSDR::getNotification() {
 
 void CubicSDR::setDeviceSelectorClosed() {
   deviceSelectorOpen.store(false);
+  // Destroy() is deferred by wxWidgets. Stop using the dialog immediately;
+  // the weak reference also handles destruction through its parent window.
+  deviceSelectorDialog = nullptr;
 }
 
 bool CubicSDR::isDeviceSelectorOpen() {

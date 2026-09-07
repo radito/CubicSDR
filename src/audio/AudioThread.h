@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -94,6 +95,8 @@ class AudioThread : public IOThread {
 
   void setGain(float gain_in);
 
+  void setDenoiseEnabled(bool enabled);
+
   static std::map<int, int> deviceSampleRate;
 
   AudioThreadCommandQueue* getCommandQueue();
@@ -112,17 +115,19 @@ class AudioThread : public IOThread {
   // protected by m_mutex
   std::vector<AudioThread*> boundThreads;
   AudioThreadInputQueuePtr inputQueue;
+  AudioThreadInputQueue playbackQueue;
   AudioThreadInputPtr currentInput;
   size_t audioQueuePtr;
   float gain;
 
   int debug;
 
-  DenoiseState* st;
-
  private:
+  static constexpr size_t RNNOISE_FRAME_SIZE = 480;
+
   std::atomic_bool active;
   std::atomic_int outputDevice;
+  std::atomic_bool denoiseEnabled{false};
 
   RtAudio dac;
   unsigned int nBufferFrames;
@@ -137,8 +142,24 @@ class AudioThread : public IOThread {
   // The own m_mutex protecting this AudioThread, in particular boundThreads
   std::recursive_mutex m_mutex;
 
+  // RNNoise runs on the per-demodulator AudioThread, outside CoreAudio's
+  // real-time callback.
+  std::mutex denoiseMutex;
+  DenoiseState* denoiseState = nullptr;
+  std::array<float, RNNOISE_FRAME_SIZE> denoiseFrame{};
+  size_t denoiseFrameFill = 0;
+  int denoiseProcessorSampleRate = 0;
+  msresamp_rrrf denoiseInputResampler = nullptr;
+  msresamp_rrrf denoiseOutputResampler = nullptr;
+  std::vector<float> denoiseModelInput;
+  std::vector<float> denoiseModelOutput;
+  ReBuffer<AudioThreadInput> denoiseOutputBuffers{"RNNoiseOutputBuffers"};
+
   void setupDevice(int deviceId);
   void setSampleRate(int sampleRate_in);
+  void processAudioInput(const AudioThreadInputPtr& input);
+  void queuePlaybackInput(const AudioThreadInputPtr& input);
+  void resetDenoiseProcessorLocked();
 
   void bindThread(AudioThread* other);
   void removeThread(AudioThread* other);

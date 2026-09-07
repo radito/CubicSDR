@@ -12,6 +12,13 @@
 #define TARGET_DISPLAY_FPS (60)
 #define SDR_DEVICE_LOST (-666)
 
+// Keep stream reads short enough for terminate() to be observed promptly.
+// SoapyRemote also polls its sockets in 100 ms intervals, so this remains
+// tolerant of ordinary network jitter without trapping the SDR thread for
+// minutes when a remote route disappears.
+static constexpr long SDR_READ_TIMEOUT_US = 100 * 1000;
+static constexpr unsigned int SDR_STALL_TIMEOUT_COUNT = 10;
+
 SDRThread::SDRThread() : IOThread(), buffers("SDRThreadBuffers") {
     device = nullptr;
 
@@ -171,8 +178,19 @@ bool SDRThread::init() {
 }
 
 void SDRThread::deinit() {
-    device->deactivateStream(stream);
-    device->closeStream(stream);
+    if (device != nullptr && stream != nullptr) {
+        try {
+            device->deactivateStream(stream);
+        } catch (const std::exception &e) {
+            std::cerr << "SDRThread: Stream deactivation failed during cleanup: " << e.what() << std::endl;
+        }
+
+        try {
+            device->closeStream(stream);
+        } catch (const std::exception &e) {
+            std::cerr << "SDRThread: Stream close failed during cleanup: " << e.what() << std::endl;
+        }
+    }
    
     if (buffs[0] != nullptr) {
         ::free(buffs[0]);
@@ -198,10 +216,7 @@ int SDRThread::readStream(const SDRThreadIQDataQueuePtr& iqDataOutQueue) {
     
     long long timeNs(0);
 
-    // Supply a huge timeout value to neutralize the readStream 'timeout' effect
-    // we are not interested in, but some modules may effectively use. 
-    //TODO: use something roughly (1 / TARGET_DISPLAY_FPS) seconds * (factor) instead.?
-    long timeoutUs = (1 << 30);
+    const long timeoutUs = SDR_READ_TIMEOUT_US;
 
     int n_read = 0;
     int nElems = numElems.load();
@@ -251,6 +266,12 @@ int SDRThread::readStream(const SDRThreadIQDataQueuePtr& iqDataOutQueue) {
         //Whatever the number of remaining samples needed to reach nElems,  we always try to read a mtElems-size chunk,
         //from which SoapySDR effectively returns n_stream_read.
         int n_stream_read = device->readStream(stream, buffs, mtElems, flags, timeNs, timeoutUs);
+
+        // terminate() cannot interrupt a driver that is inside readStream().
+        // The bounded timeout above guarantees that we get here regularly.
+        if (stopping.load()) {
+            return 0;
+        }
         
         readStreamCode = n_stream_read;
 
@@ -265,7 +286,8 @@ int SDRThread::readStream(const SDRThreadIQDataQueuePtr& iqDataOutQueue) {
             switch (n_stream_read) {
 
             case SOAPY_SDR_TIMEOUT:
-                std::cout << "SDRThread::readStream(): 2. SoapySDR read failed with code SOAPY_SDR_TIMEOUT";
+                // Expected during transient network jitter. readLoop() tracks
+                // sustained stalls without flooding stdout.
                 break;
             case SOAPY_SDR_STREAM_ERROR:
                 std::cout << "SDRThread::readStream(): 2. SoapySDR read failed with code SOAPY_SDR_STREAM_ERROR";
@@ -273,6 +295,11 @@ int SDRThread::readStream(const SDRThreadIQDataQueuePtr& iqDataOutQueue) {
 
             case SOAPY_SDR_CORRUPTION:
                 std::cout << "SDRThread::readStream(): 2. SoapySDR read failed with code SOAPY_SDR_CORRUPTION";
+                break;
+
+            case SOAPY_SDR_OVERFLOW:
+                // Overflows can be transient, especially for network devices.
+                // Do not mislabel the documented -4 code as unknown.
                 break;
 
             case SOAPY_SDR_NOT_SUPPORTED:
@@ -370,8 +397,13 @@ int SDRThread::readStream(const SDRThreadIQDataQueuePtr& iqDataOutQueue) {
         }
     } //end while
     
-    //3. At that point, dataOut contains nElems (or less if a read has return an error), try to post in queue, else discard.
-    if (n_read > 0 && !stopping && !iqDataOutQueue->full()) {
+    //3. Preserve an error when no samples arrived so readLoop() can
+    //distinguish a network timeout from an output queue backlog.
+    if (n_read <= 0 || stopping.load()) {
+        return readStreamCode;
+    }
+
+    if (!iqDataOutQueue->full()) {
         
         //clamp result to the actual read size:
         dataOut->data.resize(n_read);
@@ -389,16 +421,17 @@ int SDRThread::readStream(const SDRThreadIQDataQueuePtr& iqDataOutQueue) {
 
             //saturation, let a chance to the other threads to consume the existing samples
             std::this_thread::yield();
+            return 0;
         }
     }
     else {
-        readStreamCode = 0;
         std::cout << "SDRThread::readStream(): 3.1 iqDataOutQueue output queue is full, discard processing of the batch..." << std::endl;
         //saturation, let a chance to the other threads to consume the existing samples
         std::this_thread::yield();
+        return 0;
     }
 
-    return readStreamCode;
+    return n_read;
 }
 
 
@@ -412,14 +445,35 @@ void SDRThread::readLoop() {
     
     updateGains();
  
+    unsigned int consecutiveTimeouts = 0;
+    bool streamStalled = false;
+
     try {
         while (!stopping.load()) {
 
             updateSettings();
 
-            if (SDR_DEVICE_LOST == readStream(iqDataOutQueue)) {
+            const int readResult = readStream(iqDataOutQueue);
+
+            if (SDR_DEVICE_LOST == readResult) {
                 //stop reading loop:
                 stopping = true;
+            } else if (SOAPY_SDR_TIMEOUT == readResult) {
+                ++consecutiveTimeouts;
+                if (!streamStalled && consecutiveTimeouts >= SDR_STALL_TIMEOUT_COUNT) {
+                    streamStalled = true;
+                    wxGetApp().sdrThreadNotify(
+                        SDRThread::SDR_THREAD_MESSAGE,
+                        std::string("SDR stream stalled; waiting for samples."));
+                }
+            } else if (readResult > 0) {
+                if (streamStalled) {
+                    wxGetApp().sdrThreadNotify(
+                        SDRThread::SDR_THREAD_MESSAGE,
+                        std::string("SDR stream resumed."));
+                }
+                consecutiveTimeouts = 0;
+                streamStalled = false;
             }
         } //End while
     }
@@ -624,8 +678,23 @@ void SDRThread::run() {
     
     if (activeDev != nullptr) {
         std::cout << "device init()" << std::endl;
-        if (!init()) {
+        bool initialized = false;
+        try {
+            initialized = init();
+        } catch (const std::exception &e) {
+            const std::string message = std::string("Device initialization failed: ") + e.what();
+            std::cerr << message << std::endl;
+            wxGetApp().sdrThreadNotify(SDRThread::SDR_THREAD_FAILED, message);
+        } catch (...) {
+            const std::string message = "Device initialization failed with an unknown error.";
+            std::cerr << message << std::endl;
+            wxGetApp().sdrThreadNotify(SDRThread::SDR_THREAD_FAILED, message);
+        }
+
+        if (!initialized) {
             std::cout << "SDR Thread stream init error." << std::endl;
+            activeDev->setActive(false);
+            deinit();
             return;
         }
         std::cout << "starting readLoop()" << std::endl;

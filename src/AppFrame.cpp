@@ -317,8 +317,6 @@ AppFrame::AppFrame() :
     // Force refresh of all
     Refresh();
 
-    // Pop up the device selector
-    wxGetApp().deviceSelector();
 }
 
 void AppFrame::initIcon() {
@@ -1033,8 +1031,8 @@ void AppFrame::handleUpdateDeviceParams() {
     }
     
     newSettingsMenu->AppendSeparator();
-    agcMenuItem = newSettingsMenu->AppendCheckItem(wxID_RNNOISE_CONTROL, "Enable RNNoise");
-    agcMenuItem->Check(wxGetApp().getDenoiseMode());
+    rnnMenuItem = newSettingsMenu->AppendCheckItem(wxID_RNNOISE_CONTROL, "Enable RNNoise");
+    rnnMenuItem->Check(wxGetApp().getDenoiseMode());
 
     //Add an Antenna menu if more than one (RX) antenna, to keep the UI free of useless entries
     antennaNames.clear();
@@ -2104,12 +2102,17 @@ bool AppFrame::actionOnMenuPerformance(wxCommandEvent &event) {
 
 bool AppFrame::actionOnMenuSDRStartStop(wxCommandEvent &event) {
     if (event.GetId() == wxID_SDR_START_STOP) {
-        if (!wxGetApp().getSDRThread()->isTerminated()) {
+        // A timed-out stop leaves the completed worker joinable for a later
+        // retry. Treat a retained device as "stopping" even if the worker has
+        // just reached its terminated state, so the retry reaps it instead of
+        // accidentally starting it again.
+        if (!wxGetApp().getSDRThread()->isTerminated() ||
+            wxGetApp().getSDRThread()->getDevice() != nullptr) {
             wxGetApp().stopDevice(true, 2000);
         } else {
             SDRDeviceInfo *dev = wxGetApp().getDevice();
             if (dev != nullptr) {
-                wxGetApp().setDevice(dev, 0);
+                wxGetApp().setDevice(dev, 2000);
             }
         }
         return true;
@@ -2119,8 +2122,7 @@ bool AppFrame::actionOnMenuSDRStartStop(wxCommandEvent &event) {
 
 bool AppFrame::actionOnRnnNoise(wxCommandEvent &event) {
     if (event.GetId() == wxID_RNNOISE_CONTROL) {
-        // wxGetApp().getSDRThread()->setIQSwap(!wxGetApp().getSDRThread()->getIQSwap());
-        bool setDenoise = !wxGetApp().getDenoiseMode();
+        bool setDenoise = event.IsChecked();
         wxGetApp().setDenoiseMode(setDenoise);
         
         std::vector<DemodulatorInstancePtr> demods = wxGetApp().getDemodMgr().getDemodulators();
@@ -2167,6 +2169,7 @@ void AppFrame::OnClose(wxCloseEvent& event) {
     wxGetApp().getConfig()->setSpectrumAvgSpeed(wxGetApp().getSpectrumProcessor()->getFFTAverageRate());
     wxGetApp().getConfig()->setWaterfallLinesPerSec(waterfallDataThread->getLinesPerSecond());
     wxGetApp().getConfig()->setManualDevices(SDREnumerator::getManuals());
+    wxGetApp().getConfig()->setRemoteDevices(SDREnumerator::getRemotes());
     wxGetApp().getConfig()->setModemPropsCollapsed(modemProps->isCollapsed());
     wxGetApp().getConfig()->setMainSplit(mainSplitter->GetSashPosition());
     wxGetApp().getConfig()->setVisSplit(mainVisSplitter->GetSashPosition());
@@ -2760,6 +2763,10 @@ void AppFrame::refreshGainUI() {
 }
 
 bool AppFrame::isUserDemodBusy() {
+    return (wxGetApp().getDemodMgr().getCurrentModem() &&
+            wxGetApp().getDemodMgr().getActiveContextModem() &&
+            wxGetApp().getDemodMgr().getCurrentModem() != wxGetApp().getDemodMgr().getActiveContextModem());
+
     return (modemProps && modemProps->isMouseInView())
         || (waterfallCanvas->isMouseInView() && waterfallCanvas->isMouseDown())
         || (demodWaterfallCanvas && demodWaterfallCanvas->isMouseInView() && demodWaterfallCanvas->isMouseDown())

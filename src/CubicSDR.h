@@ -61,6 +61,7 @@ class RigThread;
 #endif
 
 #include <wx/cmdline.h>
+#include <wx/weakref.h>
 
 #define NUM_DEMODULATORS 1
 
@@ -77,6 +78,10 @@ public:
 
     bool OnInit() override;
     int OnExit() override;
+
+#ifdef __APPLE__
+    void MacReopenApp() override;
+#endif
 
     void OnInitCmdLine(wxCmdLineParser& parser) override;
     bool OnCmdLineParsed(wxCmdLineParser& parser) override;
@@ -107,8 +112,8 @@ public:
 
    
     std::vector<SDRDeviceInfo *> *getDevices();
-    void setDevice(SDRDeviceInfo *dev, int waitMsForTermination);
-    void stopDevice(bool store, int waitMsForTermination);
+    bool setDevice(SDRDeviceInfo *dev, int waitMsForTermination);
+    bool stopDevice(bool store, int waitMsForTermination);
     SDRDeviceInfo * getDevice();
 
     ScopeVisualProcessor *getScopeProcessor();
@@ -189,9 +194,10 @@ public:
 #endif
     
 private:
+    void bringToFront();
     int FilterEvent(wxEvent& event) override;
     
-    AppFrame *appframe = nullptr;
+    wxWeakRef<AppFrame> appframe;
     AppConfig config;
     PrimaryGLContext *m_glContext = nullptr;
     wxGLContextAttrs *m_glContextAttributes = nullptr;
@@ -226,7 +232,7 @@ private:
 
     ScopeVisualProcessor scopeProcessor;
     
-    SDRDevicesDialog *deviceSelectorDialog = nullptr;
+    wxWeakRef<SDRDevicesDialog> deviceSelectorDialog;
 
     SoapySDR::Kwargs streamArgs;
     SoapySDR::Kwargs settingArgs;

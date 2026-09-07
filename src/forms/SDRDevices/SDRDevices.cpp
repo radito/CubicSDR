@@ -392,7 +392,9 @@ void SDRDevicesDialog::OnUseSelected( wxMouseEvent& event) {
         devConfig->setStreamOpts(streamArgs);
         wxGetApp().setDeviceArgs(settingArgs);
         wxGetApp().setStreamArgs(streamArgs);
-        wxGetApp().setDevice(dev,0);
+        if (!wxGetApp().setDevice(dev, 2000)) {
+            return;
+        }
         
         //update main application title with Device name:
         wxString titleBar = CUBICSDR_TITLE;
@@ -610,7 +612,9 @@ void SDRDevicesDialog::doRefreshDevices() {
     editId = nullptr;
     removeId = nullptr;
     dev = nullptr;
-    wxGetApp().stopDevice(false, 2000);
+    if (!wxGetApp().stopDevice(false, 2000)) {
+        return;
+    }
     devTree->DeleteAllItems();
     devTree->Disable();
     m_propertyGrid->Clear();

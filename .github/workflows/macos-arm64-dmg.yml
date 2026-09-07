@@ -1,0 +1,170 @@
+name: macOS ARM64 DMG
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-arm64-dmg-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-dmg:
+    name: Build optimized Apple Silicon DMG
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_ENV_HINTS: "1"
+
+    steps:
+      - name: Check out source and submodules
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Verify native ARM64 runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          echo "Building on $(sw_vers -productVersion) ($(uname -m))"
+
+      - name: Install build and SDR dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install \
+            cmake \
+            ninja \
+            pkgconf \
+            wxwidgets@3.2 \
+            liquid-dsp \
+            soapysdr \
+            hamlib \
+            libusb \
+            librtlsdr \
+            soapyrtlsdr
+
+      - name: Build and install SoapyRemote
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          archive="${RUNNER_TEMP}/soapyremote-0.5.2.tar.gz"
+          source_dir="${RUNNER_TEMP}/soapyremote-source"
+          build_dir="${RUNNER_TEMP}/soapyremote-build"
+
+          curl --fail --location --retry 3 \
+            --output "$archive" \
+            "https://github.com/pothosware/SoapyRemote/archive/soapy-remote-0.5.2.tar.gz"
+          echo "66a372d85c984e7279b4fdc0a7f5b0d7ba340e390bc4b8bd626a6523cd3c3c76  $archive" \
+            | shasum -a 256 --check
+
+          mkdir -p "$source_dir"
+          tar -xzf "$archive" --strip-components=1 -C "$source_dir"
+
+          cmake -S "$source_dir" -B "$build_dir" -G Ninja \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$(brew --prefix)" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
+          cmake --build "$build_dir" --parallel "$(sysctl -n hw.logicalcpu)"
+          cmake --install "$build_dir"
+
+          SoapySDRUtil --check=remote
+          SoapySDRUtil --check=rtlsdr
+
+      - name: Build optimized CubicSDR bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Homebrew is /opt/homebrew on hosted Apple Silicon runners. Resolve
+          # wx-config dynamically so this also works on a self-hosted ARM Mac.
+          export WX_CONFIG="$(brew --prefix wxwidgets@3.2)/bin/wx-config-3.2"
+
+          ./build.sh --clean -- \
+            -G Ninja \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_POLICY_DEFAULT_CMP0069=NEW \
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+            -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -mcpu=apple-m1" \
+            -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -mcpu=apple-m1" \
+            -DCMAKE_EXE_LINKER_FLAGS_RELEASE="-Wl,-dead_strip"
+
+      - name: Verify ARM64 application bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          app="${GITHUB_WORKSPACE}/build-clean/dist/CubicSDR.app"
+          test -d "$app"
+          codesign --verify --deep --strict "$app"
+
+          while IFS= read -r candidate; do
+            if file "$candidate" | grep -q "Mach-O"; then
+              architectures="$(lipo -archs "$candidate")"
+              if [[ "$architectures" != "arm64" ]]; then
+                echo "Non-ARM64 Mach-O file: $candidate ($architectures)" >&2
+                exit 1
+              fi
+            fi
+          done < <(find "$app" -type f -print)
+
+      - name: Create compressed DMG
+        id: dmg
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          app="${GITHUB_WORKSPACE}/build-clean/dist/CubicSDR.app"
+          staging="${RUNNER_TEMP}/CubicSDR-dmg"
+          output_dir="${GITHUB_WORKSPACE}/build-clean/artifacts"
+          version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+            "$app/Contents/Info.plist")"
+          dmg_name="CubicSDR-${version}-macOS-arm64.dmg"
+          dmg_path="${output_dir}/${dmg_name}"
+
+          mkdir -p "$staging" "$output_dir"
+          ditto "$app" "$staging/CubicSDR.app"
+          ln -s /Applications "$staging/Applications"
+
+          hdiutil create \
+            -volname "CubicSDR ${version}" \
+            -srcfolder "$staging" \
+            -format UDZO \
+            -ov \
+            "$dmg_path"
+          hdiutil verify "$dmg_path"
+          shasum -a 256 "$dmg_path"
+
+          echo "name=$dmg_name" >> "$GITHUB_OUTPUT"
+          echo "path=$dmg_path" >> "$GITHUB_OUTPUT"
+
+      - name: Upload DMG artifact
+        # actions/upload-artifact v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: CubicSDR-macOS-arm64-DMG
+          path: ${{ steps.dmg.outputs.path }}
+          if-no-files-found: error
+          compression-level: 0
+          archive: false
+          retention-days: 14

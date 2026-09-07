@@ -32,6 +32,7 @@ public:
     static void addRemote(const std::string& remoteAddr);
     static void removeRemote(const std::string& remoteAddr);
     static std::vector<std::string> &getRemotes();
+    static void setRemotes(std::vector<std::string> remotes_in);
     static bool hasRemoteModule();
     static void addManual(std::string factory, std::string params);
     static void removeManual(const std::string& factory, const std::string& params);

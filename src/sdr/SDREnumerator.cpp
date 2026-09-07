@@ -361,6 +361,13 @@ std::vector<std::string> &SDREnumerator::getRemotes() {
     return remotes;
 }
 
+void SDREnumerator::setRemotes(std::vector<std::string> remotes_in) {
+    remotes.clear();
+    for (const auto &remote : remotes_in) {
+        addRemote(remote);
+    }
+}
+
 void SDREnumerator::addManual(std::string factory, std::string params) {
     SDRManualDef def;
     def.factory = factory;

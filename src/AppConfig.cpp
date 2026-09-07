@@ -4,12 +4,15 @@
 #include "AppConfig.h"
 #include "CubicSDR.h"
 
+#include <algorithm>
+#include <utility>
 #include <wx/msgdlg.h>
 
 DeviceConfig::DeviceConfig() {
 	ppm.store(0);
 	offset.store(0);
     agcMode.store(true);
+    denoiseMode.store(false);
     sampleRate.store(0);
 }
 
@@ -481,6 +484,14 @@ std::vector<SDRManualDef> AppConfig::getManualDevices() {
     return manualDevices;
 }
 
+void AppConfig::setRemoteDevices(std::vector<std::string> remotes) {
+    remoteDevices = std::move(remotes);
+}
+
+std::vector<std::string> AppConfig::getRemoteDevices() {
+    return remoteDevices;
+}
+
 void AppConfig::setMainSplit(float value) {
     mainSplit.store(value);
 }
@@ -624,6 +635,13 @@ bool AppConfig::save() {
     for (device_config_i = deviceConfig.begin(); device_config_i != deviceConfig.end(); device_config_i++) {
         DataNode *device_node = devices_node->newChild("device");
         device_config_i->second->save(device_node);
+    }
+
+    if (!remoteDevices.empty()) {
+        DataNode *remotes_node = cfg.rootNode()->newChild("remote_devices");
+        for (const auto & remoteDevice : remoteDevices) {
+            *remotes_node->newChild("remote") = remoteDevice;
+        }
     }
 
     if (!manualDevices.empty()) {
@@ -837,6 +855,32 @@ bool AppConfig::load() {
                 std::string deviceId = device_node->getNext("id")->element()->toString();
 
                 getDevice(deviceId)->load(device_node);
+            }
+        }
+    }
+
+    if (cfg.rootNode()->hasAnother("remote_devices")) {
+        DataNode *remotes_node = cfg.rootNode()->getNext("remote_devices");
+
+        while (remotes_node->hasAnother("remote")) {
+            std::string remoteAddress = remotes_node->getNext("remote")->element()->toString();
+            if (!remoteAddress.empty() &&
+                std::find(remoteDevices.begin(), remoteDevices.end(), remoteAddress) == remoteDevices.end()) {
+                remoteDevices.push_back(remoteAddress);
+            }
+        }
+    } else {
+        // Older CubicSDR configurations saved a DeviceConfig keyed by the
+        // remote endpoint, but did not save the enumeration list itself.
+        // Recover the standard SoapyRemote endpoint during migration.
+        const std::string defaultRemotePort = ":55132";
+        for (const auto & device : deviceConfig) {
+            const std::string &deviceId = device.first;
+            if (deviceId.size() > defaultRemotePort.size() &&
+                deviceId.compare(deviceId.size() - defaultRemotePort.size(),
+                                 defaultRemotePort.size(), defaultRemotePort) == 0 &&
+                deviceId.find(' ') == std::string::npos && deviceId.find('=') == std::string::npos) {
+                remoteDevices.push_back(deviceId);
             }
         }
     }

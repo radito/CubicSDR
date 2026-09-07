@@ -748,12 +748,17 @@ ENDIF(MSVC)
 IF (APPLE)
     ADD_DEFINITIONS(
         -DHAVE_TYPE_TRAITS=1
-        -mmacosx-version-min=10.9
     )
+    # Preserve the legacy deployment target for builds which do not select
+    # one explicitly, but allow modern ARM64 builds to provide a valid target.
+    IF (NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+        ADD_DEFINITIONS(-mmacosx-version-min=10.9)
+    ENDIF()
 ENDIF(APPLE)
 
 IF (APPLE AND BUNDLE_APP)
     PROJECT(CubicSDR)
+    set(CPACK_GENERATOR "DragNDrop")
     set(CPACK_BINARY_DRAGNDROP ON)
  
     SET(MACOSX_BUNDLE_BUNDLE_NAME CubicSDR)
@@ -823,7 +828,10 @@ IF (APPLE AND BUNDLE_APP)
     IF (BUNDLE_SOAPY_MODS)
     message(STATUS "SOAPY_ROOT: ${CMAKE_INSTALL_PREFIX}")
     # SET(SOAPY_SDR_MOD_PATH "${CMAKE_INSTALL_PREFIX}/lib/SoapySDR/modules${SOAPY_SDR_ABI_VERSION}")
-    SET(SOAPY_SDR_MOD_PATH "/opt/homebrew/lib/SoapySDR/modules${SOAPY_SDR_ABI_VERSION}/cubicsdr")
+    SET(SOAPY_SDR_MOD_PATH "${CMAKE_INSTALL_PREFIX}/lib/SoapySDR/modules${SOAPY_SDR_ABI_VERSION}/cubicsdr")
+    IF(NOT IS_DIRECTORY "${SOAPY_SDR_MOD_PATH}")
+        SET(SOAPY_SDR_MOD_PATH "${CMAKE_INSTALL_PREFIX}/lib/SoapySDR/modules${SOAPY_SDR_ABI_VERSION}")
+    ENDIF()
     message(STATUS "SOAPY_SDR_MOD_PATH: ${SOAPY_SDR_MOD_PATH}")
     
     file(GLOB SOAPY_MODS ${SOAPY_SDR_MOD_PATH}/*.so)
@@ -839,12 +847,6 @@ IF (APPLE AND BUNDLE_APP)
 
     SET_TARGET_PROPERTIES(CubicSDR PROPERTIES MACOSX_BUNDLE_INFO_PLIST "${PROJECT_SOURCE_DIR}/cmake/CubicSDRInfo.plist.in")
 
-    INSTALL(CODE "
-       SET(BU_COPY_FULL_FRAMEWORK_CONTENTS ON)
-       include(BundleUtilities)
-       fixup_bundle(\"${APPS}\"   \"\"   \"/usr/local/lib\")
-       " COMPONENT Runtime)
-
     IF (BUNDLE_SOAPY_MODS)
        FOREACH(SOAPY_MOD_FILE ${SOAPY_MODS})
            GET_FILENAME_COMPONENT(SOAPY_MOD_NAME ${SOAPY_MOD_FILE} NAME)
@@ -856,11 +858,17 @@ IF (APPLE AND BUNDLE_APP)
                message(STATUS "Bundling ${SOAPY_MOD_NAME} from ${SOAPY_MOD_FILE}")
            ENDIF()
            ENDIF()
-           INSTALL(CODE "
-               fixup_bundle(\"${APPS}\"   \"${APPS}/Contents/MacOS/modules/${SOAPY_MOD_NAME}\"   \"/usr/local/lib\")
-              " COMPONENT Runtime)
        ENDFOREACH()
    ENDIF(BUNDLE_SOAPY_MODS)
+
+   # Bundle the executable and every Soapy module in one pass. Running
+   # fixup_bundle once per module repeatedly rewrites the same binaries and
+   # fails as soon as any plugin contains a stale install name.
+   INSTALL(CODE "
+       set(APP_BUNDLE \"${APPS}\")
+       set(DEPENDENCY_DIRS \"${CMAKE_INSTALL_PREFIX}/lib\" \"/usr/local/lib\")
+       include(\"${PROJECT_SOURCE_DIR}/cmake/BundleMacOS.cmake\")
+       " COMPONENT Runtime)
    
    IF (CUBICSDR_CODE_SIGN)
        SET (CUBICSDR_CERT "-" CACHE STRING "Code signing certificate name.")
@@ -894,16 +902,26 @@ IF (APPLE AND BUNDLE_APP)
             COMMAND ${CMAKE_COMMAND} -E echo "Signing package.."
             COMMAND "${CMAKE_CURRENT_BINARY_DIR}/dmg_sign.sh" WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
+   ELSE()
+       # Dependency fixups invalidate any previous signature. Keep local and
+       # CI-generated packages launchable with an ad-hoc signature.
+       INSTALL(CODE "
+           execute_process(
+               COMMAND /usr/bin/codesign --force --deep --sign - \"${APPS}\"
+               RESULT_VARIABLE CUBICSDR_SIGN_RESULT
+           )
+           if(NOT CUBICSDR_SIGN_RESULT EQUAL 0)
+               message(FATAL_ERROR \"Unable to ad-hoc sign ${APPS}\")
+           endif()
+           " COMPONENT Runtime)
    ENDIF(CUBICSDR_CODE_SIGN)
-   
-   
-   INSTALL(CODE "
-       VERIFY_APP(\"${APPS}\")
-       " COMPONENT Runtime)
 
-   INSTALL(TARGETS CubicSDR
-       BUNDLE DESTINATION . COMPONENT Runtime
-   )       
+   # Copy the already-fixed and signed bundle byte-for-byte. install(TARGETS)
+   # performs additional install_name_tool edits in the CPack staging area,
+   # invalidating the signature created above.
+   INSTALL(DIRECTORY "${APPS}"
+       DESTINATION . USE_SOURCE_PERMISSIONS COMPONENT Runtime
+   )
 
    include(CPack)
 ENDIF()
