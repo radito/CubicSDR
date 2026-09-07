@@ -90,3 +90,61 @@ CUBIC_TEST(zoomed_demod_thumbnail_keeps_its_tuned_frequency_after_a_gap) {
     };
     CUBIC_REQUIRE(peakBin(expected) == peakBin(actual));
 }
+
+CUBIC_TEST(spectrum_controls_resize_and_empty_input) {
+    SpectrumFixture fixture;
+    auto& p = fixture.processor;
+    p.setView(true);
+    CUBIC_REQUIRE(p.isView());
+    p.setView(false);
+    CUBIC_REQUIRE(!p.isView());
+    p.setCenterFrequency(1000000);
+    p.setBandwidth(12000);
+    p.setFFTAverageRate(0.5f);
+    p.setScaleFactor(0.8f);
+    CUBIC_REQUIRE(p.getCenterFrequency() == 1000000);
+    CUBIC_REQUIRE(p.getBandwidth() == 12000);
+    CUBIC_REQUIRE(p.getFFTAverageRate() == 0.5f);
+    CUBIC_REQUIRE(p.getScaleFactor() == 0.8f);
+    p.run();
+    CUBIC_REQUIRE(fixture.output->empty());
+    CUBIC_REQUIRE(fixture.input->try_push(nullptr));
+    p.run();
+    CUBIC_REQUIRE(fixture.output->empty());
+    CUBIC_REQUIRE(!fixture.feed(0, 0, false));
+    p.setFFTSize(128);
+    auto frame = fixture.feed(1024, 0, false);
+    CUBIC_REQUIRE(frame != nullptr);
+    CUBIC_REQUIRE(p.getFFTSize() == 128);
+    CUBIC_REQUIRE(frame->spectrum_points.size() == 256);
+    CUBIC_REQUIRE(p.getDesiredInputSize() == 256);
+    p.setFFTSize(256);
+    requireFiniteSpectrum(fixture.feed(1024, 0, true));
+}
+
+CUBIC_TEST(spectrum_peak_hold_retuning_zoom_and_dc_hiding_remain_finite) {
+    SpectrumFixture fixture;
+    auto& p = fixture.processor;
+    p.setPeakHold(true);
+    CUBIC_REQUIRE(p.getPeakHold());
+    p.setHideDC(true);
+    for (long bw : {12000, 6000, 24000, 12000}) {
+        for (long offset : {0, 1000, -1000, 3000, -3000}) {
+            p.setView(true, 1000000 + offset, bw);
+            SpectrumVisualDataPtr frame;
+            for (size_t block = 0; block < 36; ++block) {
+                frame = fixture.feed(4096, block * 4096, false, 48000, 2000);
+            }
+            requireFiniteSpectrum(frame);
+            CUBIC_REQUIRE(frame->centerFreq == 1000000 + offset);
+            CUBIC_REQUIRE(!frame->spectrum_hold_points.empty());
+            for (float value : frame->spectrum_hold_points) CUBIC_REQUIRE(std::isfinite(value));
+        }
+    }
+    p.setPeakHold(false);
+    p.setHideDC(false);
+    p.setView(false);
+    auto frame = fixture.feed(1024, 0, true);
+    requireFiniteSpectrum(frame);
+    CUBIC_REQUIRE(frame->spectrum_hold_points.empty());
+}

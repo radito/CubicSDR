@@ -98,9 +98,12 @@ if(CUBICSDR_TEST_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         COMMAND ${CMAKE_COMMAND} -E rm -f "${COVERAGE_RAW_FILE}" "${COVERAGE_DATA_FILE}"
         COMMAND ${CMAKE_COMMAND} -E env "LLVM_PROFILE_FILE=${COVERAGE_RAW_FILE}" $<TARGET_FILE:CubicSDRTests>
         COMMAND "${LLVM_PROFDATA_EXECUTABLE}" merge -sparse "${COVERAGE_RAW_FILE}" -o "${COVERAGE_DATA_FILE}"
-        COMMAND "${LLVM_COV_EXECUTABLE}" report $<TARGET_FILE:CubicSDRTests>
-            "--instr-profile=${COVERAGE_DATA_FILE}"
-            "--ignore-filename-regex=(/tests/|/external/)"
+        COMMAND ${CMAKE_COMMAND}
+            "-DLLVM_COV_EXECUTABLE=${LLVM_COV_EXECUTABLE}"
+            "-DTEST_BINARY=$<TARGET_FILE:CubicSDRTests>"
+            "-DCOVERAGE_DATA_FILE=${COVERAGE_DATA_FILE}"
+            -DCOVERAGE_MIN_PERCENT=80
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/CheckCoverage.cmake"
         COMMAND "${LLVM_COV_EXECUTABLE}" show $<TARGET_FILE:CubicSDRTests>
             "--instr-profile=${COVERAGE_DATA_FILE}"
             "--ignore-filename-regex=(/tests/|/external/)"

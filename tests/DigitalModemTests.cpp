@@ -21,6 +21,107 @@
 #include <vector>
 
 namespace {
+template <typename T> void exerciseAllConstellations(const std::string& name) {
+    std::unique_ptr<Modem> modem(static_cast<Modem*>(T::factory()));
+    CUBIC_REQUIRE(modem->getName() == name);
+    CUBIC_REQUIRE(modem->getDefaultSampleRate() > 0);
+    CUBIC_REQUIRE(modem->checkSampleRate(1, 48000) == MIN_BANDWIDTH);
+    auto settings = modem->readSettings();
+    modem->writeSettings(settings);
+    modem->writeSetting("unknown", "ignored");
+    CUBIC_REQUIRE(modem->readSetting("unknown").empty());
+    auto options = modem->getSettings().front().options;
+    ModemIQData input;
+    input.sampleRate = 19200;
+    input.data.resize(256);
+    for (auto& sample : input.data) { sample.real = 0.5f; sample.imag = 0.5f; }
+    ModemKit* kit = modem->buildKit(19200, 48000);
+    for (const auto& option : options) {
+        modem->writeSetting("cons", option);
+        CUBIC_REQUIRE(modem->readSetting("cons") == option);
+        input.discontinuity = true;
+        modem->demodulate(kit, &input, nullptr);
+        auto* digitalKit = static_cast<ModemKitDigital*>(kit);
+        CUBIC_REQUIRE(digitalKit->symbolTracker != nullptr);
+        input.discontinuity = false;
+        modem->demodulate(kit, &input, nullptr);
+    }
+    input.data.clear();
+    modem->demodulate(kit, &input, nullptr);
+    modem->disposeKit(kit);
+}
+}
+
+CUBIC_TEST(digital_modems_support_every_advertised_constellation_and_tracker_rebuild) {
+    exerciseAllConstellations<ModemASK>("ASK");
+    exerciseAllConstellations<ModemAPSK>("APSK");
+    exerciseAllConstellations<ModemDPSK>("DPSK");
+    exerciseAllConstellations<ModemPSK>("PSK");
+    exerciseAllConstellations<ModemQAM>("QAM");
+    exerciseAllConstellations<ModemSQAM>("SQAM");
+}
+
+CUBIC_TEST(digital_tracking_settings_clamp_and_fixed_factories_reset) {
+    for (auto factory : {ModemBPSK::factory, ModemQPSK::factory, ModemOOK::factory, ModemST::factory}) {
+        std::unique_ptr<ModemDigital> modem(static_cast<ModemDigital*>(factory()));
+        modem->writeSetting("sps", "1");
+        CUBIC_REQUIRE(modem->readSetting("sps") == "2");
+        modem->writeSetting("beta", "0");
+        CUBIC_REQUIRE_NEAR(std::stof(modem->readSetting("beta")), 0.05, 1e-6);
+        modem->writeSetting("beta", "2");
+        CUBIC_REQUIRE(std::stof(modem->readSetting("beta")) == 1.0f);
+        auto* kit = modem->buildKit(19200, 48000);
+        ModemIQData input;
+        input.discontinuity = true;
+        input.data.resize(64);
+        for (auto& sample : input.data) { sample.real = 1; sample.imag = 0; }
+        modem->demodulate(kit, &input, nullptr);
+        input.data.clear();
+        modem->demodulate(kit, &input, nullptr);
+        modem->disposeKit(kit);
+    }
+}
+
+CUBIC_TEST(fsk_and_gmsk_output_complete_symbols_across_packets_and_reset) {
+    struct Output : ModemDigitalOutput {
+        std::string text;
+        void write(std::string value) override { text += value; }
+        void write(char value) override { text += value; }
+        void Show() override {}
+        void Hide() override {}
+        void Close() override {}
+    } output;
+    for (auto factory : {ModemFSK::factory, ModemGMSK::factory}) {
+        std::unique_ptr<ModemDigital> modem(static_cast<ModemDigital*>(factory()));
+        modem->setOutput(&output);
+        modem->writeSetting("unknown", "1");
+        CUBIC_REQUIRE(modem->readSetting("unknown").empty());
+        CUBIC_REQUIRE(!modem->readSettings().empty());
+        auto rate = modem->checkSampleRate(modem->getDefaultSampleRate(), 48000);
+        auto* kit = modem->buildKit(rate, 48000);
+        ModemIQData input;
+        input.sampleRate = rate;
+        input.data.resize(1);
+        input.data[0].real = 1;
+        input.data[0].imag = 0;
+        output.text.clear();
+        modem->demodulate(kit, &input, nullptr);
+        CUBIC_REQUIRE(output.text.empty());
+        input.discontinuity = true;
+        modem->demodulate(kit, &input, nullptr);
+        CUBIC_REQUIRE(output.text.empty());
+        input.discontinuity = false;
+        input.data.resize(128, input.data.front());
+        modem->demodulate(kit, &input, nullptr);
+        CUBIC_REQUIRE(!output.text.empty());
+        CUBIC_REQUIRE(output.text.find_first_not_of("0123456789") == std::string::npos);
+        modem->setOutput(nullptr);
+        modem->demodulate(kit, &input, nullptr);
+        modem->disposeKit(kit);
+    }
+}
+
+namespace {
 
 struct KitDeleter {
     Modem *modem;

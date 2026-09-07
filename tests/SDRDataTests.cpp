@@ -4,6 +4,61 @@
 #include "AudioThread.h"
 #include "DemodDefs.h"
 #include "SDRDeviceInfo.h"
+#include <SoapySDR/Registry.hpp>
+#include <algorithm>
+
+namespace {
+class TestRadio : public SoapySDR::Device {
+public:
+    std::vector<double> rates = {96000, 24000, 48000};
+    bool correction = true;
+    std::vector<double> listSampleRates(int, size_t) const override { return rates; }
+    std::vector<std::string> listFrequencies(int, size_t) const override {
+        return correction ? std::vector<std::string>{"RF", "CORR"} : std::vector<std::string>{"RF"};
+    }
+    std::vector<std::string> listAntennas(int, size_t) const override { return {"A", "B"}; }
+    std::string getAntenna(int, size_t) const override { return "B"; }
+    std::vector<std::string> listGains(int, size_t) const override { return {"RF"}; }
+    SoapySDR::Range getGainRange(int, size_t, const std::string&) const override { return {0, 40, 2}; }
+    double getGain(int, size_t, const std::string&) const override { return 12; }
+};
+SoapySDR::KwargsList findTestRadio(const SoapySDR::Kwargs& args) { return {args}; }
+SoapySDR::Device* makeTestRadio(const SoapySDR::Kwargs&) { return new TestRadio; }
+}
+
+CUBIC_TEST(sdr_device_capabilities_use_a_fake_driver_without_radio_hardware) {
+    SoapySDR::Registry registration("cubicsdr_unit_test", findTestRadio, makeTestRadio, SOAPY_SDR_ABI_VERSION);
+    SDRDeviceInfo info;
+    info.setDeviceArgs({{"driver", "cubicsdr_unit_test"}});
+    auto* radio = static_cast<TestRadio*>(info.getSoapyDevice());
+    CUBIC_REQUIRE(radio != nullptr);
+    CUBIC_REQUIRE(info.getSoapyDevice() == radio);
+    CUBIC_REQUIRE(info.hasCORR(SOAPY_SDR_RX, 0));
+    radio->correction = false;
+    CUBIC_REQUIRE(!info.hasCORR(SOAPY_SDR_RX, 0));
+    CUBIC_REQUIRE(info.getSampleRates(SOAPY_SDR_RX, 0) == (std::vector<long>{24000, 48000, 96000}));
+    CUBIC_REQUIRE(info.getSampleRateNear(SOAPY_SDR_RX, 0, 47000) == 48000);
+    CUBIC_REQUIRE(info.getSampleRateNear(SOAPY_SDR_RX, 0, 1) == 24000);
+    CUBIC_REQUIRE(info.getSampleRateNear(SOAPY_SDR_RX, 0, 200000) == 96000);
+    CUBIC_REQUIRE(info.getAntennaNames(SOAPY_SDR_RX, 0) == (std::vector<std::string>{"A", "B"}));
+    CUBIC_REQUIRE(info.getAntennaName(SOAPY_SDR_RX, 0) == "B");
+    auto gains = info.getGains(SOAPY_SDR_RX, 0);
+    CUBIC_REQUIRE(gains.size() == 1);
+    CUBIC_REQUIRE(gains.at("RF").minimum() == 0);
+    CUBIC_REQUIRE(gains.at("RF").maximum() == 40);
+    CUBIC_REQUIRE(gains.at("RF").step() == 2);
+    CUBIC_REQUIRE(info.getCurrentGain(SOAPY_SDR_RX, 0, "RF") == 12);
+    CUBIC_REQUIRE(info.getCurrentGain(SOAPY_SDR_RX, 0, "missing") == 0);
+    radio->rates.clear();
+    for (int i = 1000; i >= 1; --i) radio->rates.push_back(i * 1000.0);
+    auto rates = info.getSampleRates(SOAPY_SDR_RX, 0);
+    CUBIC_REQUIRE(std::is_sorted(rates.begin(), rates.end()));
+    CUBIC_REQUIRE(rates.size() < radio->rates.size());
+    CUBIC_REQUIRE(rates.front() == 1000 && rates.back() == 1000000);
+    auto* replacement = SoapySDR::Device::make(SoapySDR::Kwargs{{"driver", "cubicsdr_unit_test"}, {"serial", "second"}});
+    info.setSoapyDevice(replacement);
+    CUBIC_REQUIRE(info.getSoapyDevice() == replacement);
+}
 
 CUBIC_TEST(sdr_device_info_round_trips_identity_state_and_arguments) {
     SDRDeviceInfo device;

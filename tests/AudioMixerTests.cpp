@@ -7,6 +7,94 @@
 #include <thread>
 #include <vector>
 
+CUBIC_TEST(audio_ring_flush_is_applied_by_pop_and_reports_logical_fill) {
+    AudioStereoRing ring(2);
+    CUBIC_REQUIRE(ring.push(1, 2));
+    ring.clear();
+    CUBIC_REQUIRE(ring.producerAvailable() == 0);
+    CUBIC_REQUIRE(ring.push(3, 4));
+    float l, r;
+    CUBIC_REQUIRE(ring.pop(l, r));
+    CUBIC_REQUIRE(l == 3 && r == 4);
+    CUBIC_REQUIRE(ring.producerAvailable() == 0);
+    CUBIC_REQUIRE(!ring.pop(l, r));
+}
+
+CUBIC_TEST(audio_mixer_rejects_invalid_packets_and_preserves_stereo) {
+    AudioMixState state;
+    state.sampleRate = 48000;
+    AudioThreadInput packet;
+    packet.sampleRate = 48000;
+    packet.channels = 3;
+    packet.data = {1, 2, 3, 4};
+    state.queue(packet);
+    CUBIC_REQUIRE(state.ring.available() == 0);
+    packet.channels = 2;
+    packet.sampleRate = 0;
+    state.queue(packet);
+    CUBIC_REQUIRE(state.ring.available() == 0);
+    packet.sampleRate = 48000;
+    packet.data.clear();
+    state.queue(packet);
+    CUBIC_REQUIRE(state.ring.available() == 0);
+    packet.data = {1, -1, 2, -2, 99};
+    state.queue(packet);
+    CUBIC_REQUIRE(state.ring.available() == 2);
+    float l, r;
+    for (float expected : {1.0f, 2.0f}) {
+        CUBIC_REQUIRE(state.ring.pop(l, r));
+        CUBIC_REQUIRE(l == expected && r == -expected);
+    }
+}
+
+CUBIC_TEST(audio_mixer_rate_conversion_is_independent_of_packet_boundaries) {
+    for (int channels : {1, 2}) for (int inputRate : {24000, 96000}) {
+        AudioMixState whole, chunks;
+        whole.sampleRate = chunks.sampleRate = 48000;
+        AudioThreadInput packet;
+        packet.channels = channels;
+        packet.sampleRate = inputRate;
+        for (int i = 0; i < 600; ++i) {
+            packet.data.push_back(i / 600.0f);
+            if (channels == 2) packet.data.push_back(-i / 600.0f);
+        }
+        whole.queue(packet);
+        const auto data = packet.data;
+        for (size_t start = 0; start < data.size(); start += 17 * channels) {
+            packet.data.assign(data.begin() + start, data.begin() + std::min(data.size(), start + 17 * channels));
+            chunks.queue(packet);
+        }
+        CUBIC_REQUIRE(whole.ring.available() == chunks.ring.available());
+        CUBIC_REQUIRE(whole.ring.available() > 250);
+        float wl, wr, cl, cr;
+        while (whole.ring.pop(wl, wr)) {
+            CUBIC_REQUIRE(chunks.ring.pop(cl, cr));
+            CUBIC_REQUIRE_NEAR(wl, cl, 1e-6);
+            CUBIC_REQUIRE_NEAR(wr, cr, 1e-6);
+            CUBIC_REQUIRE_NEAR(wr, channels == 2 ? -wl : wl, 1e-6);
+        }
+    }
+}
+
+CUBIC_TEST(audio_mixer_overflow_keeps_buffered_audio_playable) {
+    for (int rate : {24000, 48000}) {
+        AudioMixState state;
+        state.sampleRate = 48000;
+        state.primed = true;
+        AudioThreadInput packet;
+        packet.channels = 1;
+        packet.sampleRate = rate;
+        packet.data.assign(state.ring.capacity() + 2, 0.25f);
+        state.queue(packet);
+        CUBIC_REQUIRE(state.overflows == 1);
+        CUBIC_REQUIRE(state.primed);
+        CUBIC_REQUIRE(state.ring.available() == state.ring.capacity());
+        state.clear();
+        CUBIC_REQUIRE(!state.primed);
+        CUBIC_REQUIRE(state.ring.available() == 0);
+    }
+}
+
 CUBIC_TEST(audio_stereo_ring_preserves_order_and_capacity) {
     AudioStereoRing ring(3);
     CUBIC_REQUIRE(ring.capacity() == 3);

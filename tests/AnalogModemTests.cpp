@@ -14,6 +14,70 @@
 #include <cmath>
 #include <memory>
 
+CUBIC_TEST(analog_factories_expose_valid_defaults_and_ignore_unknown_settings) {
+    for (auto factory : {ModemAM::factory, ModemDSB::factory, ModemFM::factory,
+         ModemNBFM::factory, ModemFMStereo::factory, ModemLSB::factory,
+         ModemUSB::factory, ModemCW::factory}) {
+        std::unique_ptr<Modem> modem(static_cast<Modem*>(factory()));
+        CUBIC_REQUIRE(!modem->getName().empty());
+        CUBIC_REQUIRE(modem->getType() == "analog");
+        CUBIC_REQUIRE(modem->getDefaultSampleRate() >= MIN_BANDWIDTH);
+        modem->writeSetting("unknown", "ignored");
+        CUBIC_REQUIRE(modem->readSetting("unknown").empty());
+        modem->writeSettings(modem->readSettings());
+        modem->clearRebuildKit();
+        CUBIC_REQUIRE(!modem->shouldRebuildKit());
+        CUBIC_REQUIRE(modem->checkSampleRate(1, 48000) >= MIN_BANDWIDTH);
+        CUBIC_REQUIRE(modem->checkSampleRate(12001, 48000) >= 12001);
+    }
+}
+
+CUBIC_TEST(analog_deemphasis_modes_reset_and_resize_audio_buffers) {
+    for (auto factory : {ModemFM::factory, ModemNBFM::factory, ModemFMStereo::factory}) {
+        std::unique_ptr<Modem> modem(static_cast<Modem*>(factory()));
+        const auto options = modem->getSettings().front().options;
+        for (const auto& setting : options) {
+            modem->writeSetting("demph", setting);
+            CUBIC_REQUIRE(modem->readSetting("demph") == setting);
+            auto rate = modem->getDefaultSampleRate();
+            auto* kit = modem->buildKit(rate, 48000);
+            for (size_t size : {4096, 256, 8192, 0}) {
+                ModemIQData input;
+                input.sampleRate = rate;
+                input.discontinuity = true;
+                input.data.resize(size);
+                for (auto& sample : input.data) { sample.real = 1; sample.imag = 0; }
+                AudioThreadInput audio;
+                modem->demodulate(kit, &input, &audio);
+                if (size) {
+                    CUBIC_REQUIRE(!audio.data.empty());
+                    for (float sample : audio.data) CUBIC_REQUIRE(std::isfinite(sample));
+                }
+            }
+            modem->disposeKit(kit);
+        }
+    }
+}
+
+CUBIC_TEST(cw_automatic_gain_handles_gaps_silence_and_size_changes) {
+    ModemCW modem;
+    modem.writeSetting("auto", "on");
+    CUBIC_REQUIRE(modem.readSetting("auto") == "on");
+    auto* kit = modem.buildKit(1000, 48000);
+    for (size_t count : {64, 32, 128, 0}) {
+        ModemIQData input;
+        input.sampleRate = 1000;
+        input.discontinuity = true;
+        input.data.resize(count);
+        for (auto& sample : input.data) { sample.real = 1; sample.imag = 0; }
+        AudioThreadInput audio;
+        modem.demodulate(kit, &input, &audio);
+        for (float sample : audio.data) CUBIC_REQUIRE(std::isfinite(sample) && std::fabs(sample) <= 1.0f);
+        CUBIC_REQUIRE(std::isfinite(std::stof(modem.readSetting("gain"))));
+    }
+    modem.disposeKit(kit);
+}
+
 namespace {
 
 struct KitDeleter {

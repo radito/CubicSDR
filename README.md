@@ -25,6 +25,11 @@ Clang builds can also generate a terminal summary and browsable HTML coverage re
     cmake --build build-coverage --target CubicSDRCoverage
 
 The HTML report is written to `build-coverage/tests/coverage/index.html`.
+The coverage target requires at least 80% region, function, line, and branch
+coverage. It measures code linked into `CubicSDRTests`, excluding test sources
+and vendored code; it does not represent coverage of the entire GUI app or
+live audio/SDR hardware paths. Device capability tests use an in-process fake
+SoapySDR driver and do not connect to a receiver.
 
 Utilizes: 
 --------
