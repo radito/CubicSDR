@@ -131,14 +131,22 @@ void ModemFSK::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput * 
     
     digitalStart(dkit, nullptr, input);
 
+    if (input->discontinuity) {
+        dkit->inputBuffer.clear();
+        fskdem_reset(dkit->demodFSK);
+        setDemodulatorLock(false);
+    }
+
     dkit->inputBuffer.insert(dkit->inputBuffer.end(),input->data.begin(),input->data.end());
 
-    while (dkit->inputBuffer.size() >= dkit->k) {
-        outStream << fskdem_demodulate(dkit->demodFSK, &dkit->inputBuffer[0]);
+    const size_t symbolCount = dkit->inputBuffer.size() / dkit->k;
+    for (size_t symbol = 0; symbol < symbolCount; ++symbol) {
+        outStream << fskdem_demodulate(dkit->demodFSK, dkit->inputBuffer.data() + symbol * dkit->k);
         
 //        float err = fskdem_get_frequency_error(dkit->demodFSK);
-        dkit->inputBuffer.erase(dkit->inputBuffer.begin(),dkit->inputBuffer.begin()+dkit->k);
     }
+    const size_t numProcessed = symbolCount * dkit->k;
+    dkit->inputBuffer.erase(dkit->inputBuffer.begin(), dkit->inputBuffer.begin() + numProcessed);
     
     digitalFinish(dkit, nullptr);
 }

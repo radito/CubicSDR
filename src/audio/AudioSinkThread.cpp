@@ -15,10 +15,9 @@ AudioSinkThread::~AudioSinkThread() = default;
 
 void AudioSinkThread::run() {
 #ifdef __APPLE__
-    pthread_t tID = pthread_self();	 // ID of this thread
-    int priority = sched_get_priority_max(SCHED_RR) - 1;
-    sched_param prio = { priority }; // scheduling priority of thread
-    pthread_setschedparam(tID, SCHED_RR, &prio);
+    if (__builtin_available(macOS 10.10, *)) {
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
+    }
 #endif
 
     AudioThreadInputPtr inp;

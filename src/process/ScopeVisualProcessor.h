@@ -44,6 +44,8 @@ protected:
     
     std::vector<liquid_float_complex> fftInData;
     std::vector<liquid_float_complex> fftOutput;
+    std::vector<float> fftWindow;
+    double fftPowerScale = 1.0;
     fftplan fftPlan;
     
     unsigned int fftSize = 0;

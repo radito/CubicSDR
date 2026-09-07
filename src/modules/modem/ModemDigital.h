@@ -14,6 +14,11 @@ public:
     ModemKitDigital() : ModemKit() {
         
     };
+
+    symtrack_cccf symbolTracker = nullptr;
+    modulation_scheme trackerScheme = LIQUID_MODEM_UNKNOWN;
+    unsigned int samplesPerSymbol = 2;
+    float excessBandwidth = 0.3f;
 };
 
 class ModemDigitalOutput {
@@ -38,6 +43,9 @@ public:
     std::string getType() override;
     
     int checkSampleRate(long long sampleRate, int audioSampleRate) override;
+    ModemArgInfoList getSettings() override;
+    void writeSetting(std::string setting, std::string value) override;
+    std::string readSetting(std::string setting) override;
     
     ModemKit *buildKit(long long sampleRate, int audioSampleRate) override;
     void disposeKit(ModemKit *kit) override;
@@ -56,7 +64,10 @@ public:
     
 protected:
     std::vector<unsigned int> demodOutputDataDigital;
+    std::vector<liquid_float_complex> synchronizedInput;
     std::atomic_bool currentDemodLock;
+    int samplesPerSymbol = 2;
+    float excessBandwidth = 0.3f;
 #if ENABLE_DIGITAL_LAB
     ModemDigitalOutput *digitalOut;
     std::stringstream outStream;

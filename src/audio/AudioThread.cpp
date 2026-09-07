@@ -18,21 +18,29 @@ std::map<int, int> AudioThread::deviceSampleRate;
 
 std::recursive_mutex AudioThread::m_device_mutex;
 
-AudioThread::AudioThread() : IOThread(), nBufferFrames(RNNOISE_FRAME_SIZE), sampleRate(0), controllerThread(nullptr) {
+AudioThread::AudioThread() : IOThread(), nBufferFrames(RNNOISE_FRAME_SIZE), sampleRate(0), controllerThread(nullptr), mixState(std::make_shared<AudioMixState>()) {
 
-  audioQueuePtr = 0;
   underflowCount = 0;
   active.store(false);
   outputDevice.store(-1);
-  gain = 1.0;
 
-  playbackQueue.set_max_num_items(16);
+  for (auto& source : mixSources) source.store(nullptr, std::memory_order_relaxed);
+  for (auto& hazard : mixHazards) hazard.store(nullptr, std::memory_order_relaxed);
+
   debug = 255;
 
   cout << "Initialize AudioThread" << std::endl;
 }
 
 AudioThread::~AudioThread() {
+
+  mixState->active.store(false, std::memory_order_release);
+  mixState->clear();
+
+  {
+    std::lock_guard<std::mutex> lock(denoiseMutex);
+    resetDenoiseProcessorLocked();
+  }
 
   if (controllerThread != nullptr) {
 
@@ -61,8 +69,23 @@ void AudioThread::bindThread(AudioThread* other) {
 
   std::lock_guard<std::recursive_mutex> lock(m_mutex);
 
+  const auto owner = other->mixState;
+  bool sourceBound = false;
+  for (auto& source : mixSources) {
+    AudioMixState* expected = nullptr;
+    if (source.compare_exchange_strong(expected, owner.get(), std::memory_order_seq_cst) ||
+        expected == owner.get()) {
+      sourceBound = true;
+      break;
+    }
+  }
+  if (!sourceBound) return;
+
   if (std::find(boundThreads.begin(), boundThreads.end(), other) == boundThreads.end()) {
     boundThreads.push_back(other);
+  }
+  if (std::find(mixStateOwners.begin(), mixStateOwners.end(), owner) == mixStateOwners.end()) {
+    mixStateOwners.push_back(owner);
   }
 }
 
@@ -70,11 +93,35 @@ void AudioThread::removeThread(AudioThread* other) {
 
   std::lock_guard<std::recursive_mutex> lock(m_mutex);
 
-  auto i = std::find(boundThreads.begin(), boundThreads.end(), other);
+  AudioMixState* removedState = other->mixState.get();
+  for (auto& source : mixSources) {
+    if (source.load(std::memory_order_seq_cst) == removedState) {
+      source.store(nullptr, std::memory_order_seq_cst);
+    }
+  }
 
+  // A callback that observed the old source either publishes its hazard
+  // before the removal above or rechecks the slot and abandons the pointer.
+  // Waiting is confined to the control thread; CoreAudio never blocks.
+  bool hazardous;
+  do {
+    hazardous = false;
+    for (auto& hazard : mixHazards) {
+      if (hazard.load(std::memory_order_seq_cst) == removedState) {
+        hazardous = true;
+        std::this_thread::yield();
+        break;
+      }
+    }
+  } while (hazardous);
+
+  auto i = std::find(boundThreads.begin(), boundThreads.end(), other);
   if (i != boundThreads.end()) {
     boundThreads.erase(i);
   }
+  mixStateOwners.erase(
+      std::remove(mixStateOwners.begin(), mixStateOwners.end(), other->mixState),
+      mixStateOwners.end());
 }
 
 void AudioThread::deviceCleanup() {
@@ -98,98 +145,54 @@ static int audioCallback(void* outputBuffer, void* /* inputBuffer */, unsigned i
   ::memset(out, 0, nBufferFrames * 2 * sizeof(float));
 
   auto* src = (AudioThread*)userData;
-  std::lock_guard<std::recursive_mutex> lock(src->getMutex());
-
   if (src->isTerminated()) {
     return 1;
   }
 
   if (status) {
-    std::cout << "Audio buffer underflow.." << (src->underflowCount++) << std::endl << std::flush;
+    src->underflowCount.fetch_add(1, std::memory_order_relaxed);
   }
 
-  double peak = 0.0;
-
-  // RNNoise has already run on each bound AudioThread. This real-time callback
-  // only consumes prepared audio and mixes it for the output device.
-  for (AudioThread* srcmix : src->boundThreads) {
-    std::lock_guard<std::recursive_mutex> lock(srcmix->getMutex());
-
-    if (srcmix->isTerminated() || !srcmix->isActive()) {
+  for (size_t sourceIndex = 0; sourceIndex < AudioThread::MAX_MIX_SOURCES; ++sourceIndex) {
+    AudioMixState* state = src->protectMixSource(sourceIndex);
+    if (!state || !state->active.load(std::memory_order_acquire)) {
+      src->releaseMixSource(sourceIndex);
       continue;
     }
-
-    const int outputSampleRate = src->getSampleRate();
-    double mixPeak = 0.0;
-
-    // Continue consuming currentInput even when playbackQueue is empty. The
-    // previous code stranded unread samples unless another packet was queued.
-    auto loadInput = [&](int expectedChannels, size_t samplesNeeded) {
-      while (true) {
-        if (srcmix->currentInput &&
-            srcmix->currentInput->sampleRate == outputSampleRate &&
-            (srcmix->currentInput->channels == 1 || srcmix->currentInput->channels == 2) &&
-            (expectedChannels == 0 || srcmix->currentInput->channels == expectedChannels) &&
-            srcmix->audioQueuePtr + samplesNeeded <= srcmix->currentInput->data.size()) {
-          mixPeak = std::max(mixPeak, static_cast<double>(srcmix->currentInput->peak * srcmix->gain));
-          return true;
-        }
-
-        // Let the next callback switch paths if mono/stereo layout changes.
-        if (srcmix->currentInput && expectedChannels != 0 &&
-            srcmix->currentInput->sampleRate == outputSampleRate &&
-            srcmix->currentInput->channels != expectedChannels &&
-            srcmix->audioQueuePtr < srcmix->currentInput->data.size()) {
-          return false;
-        }
-
-        srcmix->audioQueuePtr = 0;
-        srcmix->currentInput = nullptr;
-        if (!srcmix->playbackQueue.try_pop(srcmix->currentInput)) {
-          return false;
-        }
+    if (!state->primed.load(std::memory_order_acquire)) {
+      // Hold roughly 20 ms before starting/restarting. The SDR can deliver
+      // audio in larger, less frequent packets than CoreAudio requests; a
+      // half-callback threshold repeatedly drained the ring between packets.
+      const int outputRate = state->sampleRate.load(std::memory_order_relaxed);
+      const size_t jitterFrames = outputRate > 0
+          ? static_cast<size_t>(outputRate / 50)
+          : 1;
+      const size_t startupFrames = std::max<size_t>(nBufferFrames * 2, jitterFrames);
+      if (state->ring.available() < startupFrames) {
+        src->releaseMixSource(sourceIndex);
+        continue;
       }
-    };
-
-    if (!loadInput(0, 1)) {
-      continue;
+      state->primed.store(true, std::memory_order_release);
     }
 
-    bool mixedAudio = false;
-
-    if (srcmix->currentInput->channels == 1) {
-      for (unsigned int i = 0; i < nBufferFrames; i++) {
-        if (!loadInput(1, 1)) {
-          break;
-        }
-
-        float data = srcmix->currentInput->data[srcmix->audioQueuePtr] * srcmix->gain;
-        srcmix->audioQueuePtr++;
-        out[i * 2] += data;
-        out[i * 2 + 1] += data;
-        mixedAudio = true;
+    const float sourceGain = state->gain.load(std::memory_order_relaxed);
+    for (unsigned int i = 0; i < nBufferFrames; ++i) {
+      float left = 0.0f, right = 0.0f;
+      if (!state->ring.pop(left, right)) {
+        state->underflows.fetch_add(1, std::memory_order_relaxed);
+        state->primed.store(false, std::memory_order_release);
+        break;
       }
-    } else {
-      for (unsigned int i = 0; i < nBufferFrames; i++) {
-        if (!loadInput(2, 2)) {
-          break;
-        }
-
-        out[i * 2] += srcmix->currentInput->data[srcmix->audioQueuePtr] * srcmix->gain;
-        out[i * 2 + 1] += srcmix->currentInput->data[srcmix->audioQueuePtr + 1] * srcmix->gain;
-        srcmix->audioQueuePtr += 2;
-        mixedAudio = true;
-      }
+      out[i * 2] += left * sourceGain;
+      out[i * 2 + 1] += right * sourceGain;
     }
-
-    if (mixedAudio) {
-      peak += mixPeak;
-    }
+    src->releaseMixSource(sourceIndex);
   }
 
-  //normalize volume
-  if (peak > 1.0) {
-    float invPeak = (float)(1.0 / peak);
+  float peak = 0.0f;
+  for (unsigned int i = 0; i < nBufferFrames * 2; ++i) peak = std::max(peak, std::fabs(out[i]));
+  if (peak > 1.0f) {
+    const float invPeak = 1.0f / peak;
 
     for (unsigned int i = 0; i < nBufferFrames * 2; i++) {
       out[i] *= invPeak;
@@ -285,7 +288,8 @@ void AudioThread::setSampleRate(int sampleRate_in) {
   {
     std::lock_guard<std::recursive_mutex> lock(m_device_mutex);
 
-    if (deviceController[outputDevice.load()] == this) {
+    const auto controller = deviceController.find(outputDevice.load());
+    if (controller != deviceController.end() && controller->second == this) {
       thisIsAController = true;
       deviceSampleRate[outputDevice.load()] = sampleRate_in;
     }
@@ -296,8 +300,10 @@ void AudioThread::setSampleRate(int sampleRate_in) {
     resetDenoise = !thisIsAController && sampleRate != sampleRate_in;
 
     if (thisIsAController) {
-      dac.stopStream();
-      dac.closeStream();
+      if (dac.isStreamOpen()) {
+        if (dac.isStreamRunning()) dac.stopStream();
+        dac.closeStream();
+      }
 
       //Set bounded sample rate:
       for (auto srcmix : boundThreads) {
@@ -313,11 +319,19 @@ void AudioThread::setSampleRate(int sampleRate_in) {
         }
       }
 
-      dac.openStream(&parameters, nullptr, RTAUDIO_FLOAT32, sampleRate_in, &nBufferFrames, &audioCallback, (void*)this, &opts);
-      dac.startStream();
+      try {
+        dac.openStream(&parameters, nullptr, RTAUDIO_FLOAT32, sampleRate_in, &nBufferFrames, &audioCallback, (void*)this, &opts);
+        dac.startStream();
+      } catch (RtAudioError& e) {
+        e.printMessage();
+        active.store(false);
+        mixState->active.store(false, std::memory_order_release);
+      }
     }
 
     sampleRate = sampleRate_in;
+    mixState->sampleRate.store(sampleRate_in, std::memory_order_release);
+    mixState->clear();
   }
 
   if (resetDenoise) {
@@ -391,6 +405,9 @@ void AudioThread::setupDevice(int deviceId) {
       deviceController[parameters.deviceId]->bindThread(this);
     }
     active = true;
+    mixState->sampleRate.store(sampleRate, std::memory_order_release);
+    mixState->active.store(true, std::memory_order_release);
+    mixState->clear();
 
   } catch (RtAudioError& e) {
     e.printMessage();
@@ -418,21 +435,24 @@ void AudioThread::setInitOutputDevice(int deviceId, int sampleRate_in) {
 
   outputDevice = deviceId;
   if (sampleRate_in == -1) {
-    if (deviceSampleRate.find(parameters.deviceId) != deviceSampleRate.end()) {
+    if (deviceSampleRate.find(deviceId) != deviceSampleRate.end()) {
       sampleRate_in = deviceSampleRate[deviceId];
     }
   } else {
     deviceSampleRate[deviceId] = sampleRate_in;
   }
   sampleRate = sampleRate_in;
+  mixState->sampleRate.store(sampleRate_in, std::memory_order_release);
+  mixState->clear();
 }
 
 void AudioThread::run() {
 #ifdef __APPLE__
-  pthread_t tID = pthread_self();  // ID of this thread
-  int priority = sched_get_priority_max(SCHED_RR) - 1;
-  sched_param prio = {priority};  // scheduling priority of thread
-  pthread_setschedparam(tID, SCHED_RR, &prio);
+  // macOS ignores portable realtime policies for ordinary application
+  // threads. QoS is the supported scheduler hint for latency-sensitive work.
+  if (__builtin_available(macOS 10.10, *)) {
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+  }
 #endif
 
   //    std::cout << "Audio thread initializing.." << std::endl;
@@ -478,19 +498,18 @@ void AudioThread::run() {
   if (inputQueue != nullptr) {
     inputQueue->flush();
   }
-  playbackQueue.flush();
-
-  //Nullify currentInput...
-  currentInput = nullptr;
+  mixState->active.store(false, std::memory_order_release);
+  mixState->clear();
 
   //Stop : Retrieve the matching controlling thread in a scope lock:
   AudioThread* controllerMatchingThread;
   {
     std::lock_guard<std::recursive_mutex> global_lock(m_device_mutex);
-    controllerMatchingThread = deviceController[parameters.deviceId];
+    const auto controller = deviceController.find(parameters.deviceId);
+    controllerMatchingThread = controller == deviceController.end() ? nullptr : controller->second;
   }
 
-  if (controllerMatchingThread != this) {
+  if (controllerMatchingThread && controllerMatchingThread != this) {
     //'this' is not the controller, so remove it from the bounded list:
     //beware, we must take the controller mutex, because the audio callback may use the list of bounded
     //threads at that moment:
@@ -526,9 +545,8 @@ void AudioThread::terminate() {
   if (inputQueue) {
     inputQueue->flush();
   }
-  playbackQueue.flush();
-  currentInput = nullptr;
-  audioQueuePtr = 0;
+  mixState->active.store(false, std::memory_order_release);
+  mixState->clear();
 }
 
 bool AudioThread::isActive() {
@@ -569,10 +587,9 @@ void AudioThread::setActive(bool state) {
     if (inputQueue) {
       inputQueue->flush();
     }
-    playbackQueue.flush();
-    currentInput = nullptr;
-    audioQueuePtr = 0;
     active = state;
+    mixState->active.store(state, std::memory_order_release);
+    mixState->clear();
   }
 
   if (!state && wasActive) {
@@ -593,7 +610,7 @@ void AudioThread::setGain(float gain_in) {
     gain_in = 2.0;
   }
   std::lock_guard<std::recursive_mutex> lock(m_mutex);
-  gain = gain_in;
+  mixState->gain.store(gain_in, std::memory_order_release);
 }
 
 void AudioThread::setDenoiseEnabled(bool enabled) {
@@ -611,9 +628,7 @@ void AudioThread::setDenoiseEnabled(bool enabled) {
   if (inputQueue) {
     inputQueue->flush();
   }
-  playbackQueue.flush();
-  currentInput = nullptr;
-  audioQueuePtr = 0;
+  mixState->clear();
 }
 
 void AudioThread::resetDenoiseProcessorLocked() {
@@ -641,11 +656,7 @@ void AudioThread::queuePlaybackInput(const AudioThreadInputPtr& input) {
     return;
   }
 
-  if (!playbackQueue.try_push(input)) {
-    AudioThreadInputPtr dropped;
-    playbackQueue.try_pop(dropped);
-    playbackQueue.try_push(input);
-  }
+  mixState->queue(*input);
 }
 
 void AudioThread::processAudioInput(const AudioThreadInputPtr& input) {
@@ -667,6 +678,11 @@ void AudioThread::processAudioInput(const AudioThreadInputPtr& input) {
   if (!denoiseEnabled.load()) {
     queuePlaybackInput(input);
     return;
+  }
+  if (input->discontinuity) {
+    // Do not combine a partial RNNoise frame or resampler history with audio
+    // from the far side of a dropped IQ block.
+    resetDenoiseProcessorLocked();
   }
   // RNNoise is fixed at 480 samples/48 kHz. Keep streaming resamplers on both
   // sides so changing CubicSDR's audio rate does not disable denoising.
@@ -713,6 +729,7 @@ void AudioThread::processAudioInput(const AudioThreadInputPtr& input) {
   output->type = input->type;
   output->is_squelch_active = input->is_squelch_active;
   output->is_denoised = true;
+  output->discontinuity = input->discontinuity;
   output->data.clear();
   output->dataOut.clear();
 

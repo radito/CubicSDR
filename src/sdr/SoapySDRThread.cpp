@@ -31,6 +31,8 @@ SDRThread::SDRThread() : IOThread(), buffers("SDRThreadBuffers") {
     ppm.store(0);
 
     numElems.store(0);
+    mtuElems.store(0);
+    numOverflow = 0;
     
     rate_changed.store(false);
     freq_changed.store(false);
@@ -219,6 +221,10 @@ int SDRThread::readStream(const SDRThreadIQDataQueuePtr& iqDataOutQueue) {
     const long timeoutUs = SDR_READ_TIMEOUT_US;
 
     int n_read = 0;
+    bool outputDiscontinuity = pendingDiscontinuity;
+    bool discontinuityAfterBlock = false;
+    bool outputHasTimestamp = false;
+    long long outputTimeNs = 0;
     int nElems = numElems.load();
     int mtElems = mtuElems.load();
 
@@ -237,6 +243,8 @@ int SDRThread::readStream(const SDRThreadIQDataQueuePtr& iqDataOutQueue) {
 
     //1.If overflow occurred on the previous readStream(), transfer it in dataOut directly. 
     if (numOverflow > 0) {
+        outputHasTimestamp = overflowHasTimestamp;
+        outputTimeNs = overflowTimeNs;
         int n_overflow = std::min(numOverflow, nElems);
         
         //safety
@@ -247,6 +255,11 @@ int SDRThread::readStream(const SDRThreadIQDataQueuePtr& iqDataOutQueue) {
 
         //is still > 0 if MTU > nElements (low sample rate w.r.t the MTU !)
         numOverflow -= n_overflow;
+        if (overflowHasTimestamp && sampleRate.load() > 0) {
+            overflowTimeNs += static_cast<long long>(
+                (static_cast<long double>(n_overflow) * 1000000000.0L) /
+                static_cast<long double>(sampleRate.load()));
+        }
 
         // std::cout << "SDRThread::readStream() 1.1 overflowBuffer not empty, collect the remaining " << n_overflow << " samples in it..." << std::endl;
         
@@ -254,6 +267,9 @@ int SDRThread::readStream(const SDRThreadIQDataQueuePtr& iqDataOutQueue) {
             ::memmove(&overflowBuffer.data[0], &overflowBuffer.data[n_overflow], numOverflow * sizeof(liquid_float_complex));
 
         //    std::cout << "SDRThread::readStream() 1.2 overflowBuffer still not empty, compact the remaining " << numOverflow << " samples in it..." << std::endl;
+        }
+        else {
+            overflowHasTimestamp = false;
         }
     } //end if numOverflow > 0
     
@@ -281,6 +297,10 @@ int SDRThread::readStream(const SDRThreadIQDataQueuePtr& iqDataOutQueue) {
              break;
         }
         else if (n_stream_read < 0) {
+            if (n_stream_read == SOAPY_SDR_OVERFLOW || n_stream_read == SOAPY_SDR_CORRUPTION ||
+                n_stream_read == SOAPY_SDR_STREAM_ERROR) {
+                discontinuityAfterBlock = true;
+            }
 
             //trace here interesting error codes from the Soapy side.
             switch (n_stream_read) {
@@ -310,6 +330,11 @@ int SDRThread::readStream(const SDRThreadIQDataQueuePtr& iqDataOutQueue) {
             default:
                 std::cout << "SDRThread::readStream(): 2. SoapySDR read failed with unknown code: " << n_stream_read << std::endl;
             }
+        }
+
+        if (n_stream_read > 0 && n_read == 0 && (flags & SOAPY_SDR_HAS_TIME)) {
+            outputHasTimestamp = true;
+            outputTimeNs = timeNs;
         }
         
         //success read beyond nElems, so with overflow:
@@ -354,6 +379,13 @@ int SDRThread::readStream(const SDRThreadIQDataQueuePtr& iqDataOutQueue) {
 
             //safety
             assureBufferMinSize(&overflowBuffer, numOverflow + numNewOverflow);
+
+            if (numNewOverflow > 0 && (flags & SOAPY_SDR_HAS_TIME) && sampleRate.load() > 0) {
+                overflowHasTimestamp = true;
+                overflowTimeNs = timeNs + static_cast<long long>(
+                    (static_cast<long double>(n_requested) * 1000000000.0L) /
+                    static_cast<long double>(sampleRate.load()));
+            }
 
             if (iq_swap.load()) {
 
@@ -400,8 +432,15 @@ int SDRThread::readStream(const SDRThreadIQDataQueuePtr& iqDataOutQueue) {
     //3. Preserve an error when no samples arrived so readLoop() can
     //distinguish a network timeout from an output queue backlog.
     if (n_read <= 0 || stopping.load()) {
+        if (discontinuityAfterBlock) {
+            pendingDiscontinuity = true;
+        }
         return readStreamCode;
     }
+
+    // Preserve timestamps as metadata. A timestamp jump alone is not proof
+    // of dropped samples (drivers may rebase or quantize their clock).
+    // Reset DSP only for explicit stream errors or locally dropped blocks.
 
     if (!iqDataOutQueue->full()) {
         
@@ -412,19 +451,27 @@ int SDRThread::readStream(const SDRThreadIQDataQueuePtr& iqDataOutQueue) {
         dataOut->sampleRate = sampleRate.load();
         dataOut->dcCorrected = hasHardwareDC.load();
         dataOut->numChannels = numChannels.load();
+        dataOut->discontinuity = outputDiscontinuity;
+        dataOut->hasTimestamp = outputHasTimestamp;
+        dataOut->timeNs = outputTimeNs;
+        dataOut->sequence = nextSequence++;
         
         if (!iqDataOutQueue->try_push(dataOut)) {
             //The rest of the system saturates,
             //finally the push didn't succeeded.
             readStreamCode = 0;
+            pendingDiscontinuity = true;
             std::cout << "SDRThread::readStream(): 3.2 iqDataOutQueue output queue is full, discard processing of the batch..." << std::endl;
 
             //saturation, let a chance to the other threads to consume the existing samples
             std::this_thread::yield();
             return 0;
         }
+        pendingDiscontinuity = discontinuityAfterBlock;
     }
     else {
+        ++nextSequence;
+        pendingDiscontinuity = true;
         std::cout << "SDRThread::readStream(): 3.1 iqDataOutQueue output queue is full, discard processing of the batch..." << std::endl;
         //saturation, let a chance to the other threads to consume the existing samples
         std::this_thread::yield();
@@ -585,6 +632,8 @@ void SDRThread::updateSettings() {
         buffs[0] = ::malloc(mtuElems.load() * 4 * sizeof(float));
         //clear overflow buffer
         numOverflow = 0;
+        overflowHasTimestamp = false;
+        pendingDiscontinuity = true;
 
         //
         rate_changed.store(false);
@@ -751,7 +800,7 @@ int SDRThread::getOptimalChannelCount(long long sampleRate_in) {
     int optimal_count = int(ceil(double(sampleRate_in) / double(optimal_rate)));
     
     if (optimal_count % 2 == 1) {
-        optimal_count--;
+        optimal_count++;
     }
     
     if (optimal_count < 2) {

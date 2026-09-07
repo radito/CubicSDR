@@ -56,6 +56,8 @@ ModemArgInfoList ModemPSK::getSettings() {
     consOpts.push_back("256");
     consArg.options = consOpts;
     args.push_back(consArg);
+    ModemArgInfoList tracking = ModemDigital::getSettings();
+    args.insert(args.end(), tracking.begin(), tracking.end());
     
     return args;
 }
@@ -64,6 +66,8 @@ void ModemPSK::writeSetting(std::string setting, std::string value) {
     if (setting == "cons") {
         int newCons = std::stoi(value);
         updateDemodulatorCons(newCons);
+    } else {
+        ModemDigital::writeSetting(setting, value);
     }
 }
 
@@ -71,7 +75,7 @@ std::string ModemPSK::readSetting(std::string setting) {
     if (setting == "cons") {
         return std::to_string(cons);
     }
-    return "";
+    return ModemDigital::readSetting(setting);
 }
 
 void ModemPSK::updateDemodulatorCons(int cons_in) {
@@ -109,8 +113,8 @@ void ModemPSK::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput * 
 
     digitalStart(dkit, demodPSK, input);
     
-    for (size_t i = 0, bufSize = input->data.size(); i < bufSize; i++) {
-        modemcf_demodulate(demodPSK, input->data[i], &demodOutputDataDigital[i]);
+    for (size_t i = 0, bufSize = synchronizedInput.size(); i < bufSize; i++) {
+        modemcf_demodulate(demodPSK, synchronizedInput[i], &demodOutputDataDigital[i]);
     }
     updateDemodulatorLock(demodPSK, 0.005f);
     

@@ -3,6 +3,8 @@
 
 #include "ModemCW.h"
 
+#include <algorithm>
+
 // We are given a baseband segment BW (default 500Hz) wide which we want to
 // offset by mBeepFrequency (default 650Hz). This yields a spectrum.
 //
@@ -158,6 +160,13 @@ void ModemCW::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput *au
     liquid_float_complex sig;
     auto *cwkit = (ModemKitCW *) kit;
 
+    if (input->discontinuity) {
+        msresamp_cccf_reset(cwkit->mInputResampler);
+        nco_crcf_reset(mLO);
+        firhilbf_reset(mToReal);
+        aOutputCeil = aOutputCeilMA = aOutputCeilMAA = 1.0f;
+    }
+
     initOutputBuffers(cwkit, input);
 
     if (!bufSize) {
@@ -190,17 +199,19 @@ void ModemCW::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput *au
         aOutputCeil = 0;
 
         for (size_t i = 0; i < outSize; i++) {
-            if (demodOutputData[i] > aOutputCeil) {
-                aOutputCeil = demodOutputData[i];
+            const float magnitude = std::fabs(demodOutputData[i]);
+            if (magnitude > aOutputCeil) {
+                aOutputCeil = magnitude;
             }
         }
 
-        mGain = 10.0f * std::log10(0.5f / aOutputCeilMAA);
+        mGain = 20.0f * std::log10(0.5f / std::max(aOutputCeilMAA, 1.0e-6f));
     }
 
     // Apply gain to demodulated output data
     for (size_t i = 0; i < outSize; i++) {
-        demodOutputData[i] *= std::pow(10.0f, mGain / 10.0f);
+        demodOutputData[i] = std::clamp(
+            demodOutputData[i] * std::pow(10.0f, mGain / 20.0f), -1.0f, 1.0f);
     }
 
     audioOut->channels = 1;

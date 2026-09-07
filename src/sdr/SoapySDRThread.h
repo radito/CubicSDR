@@ -16,22 +16,29 @@
 #include <SoapySDR/Device.hpp>
 
 #include <cstddef>
+#include <cstdint>
 
 class SDRThreadIQData {
 public:
     long long frequency;
     long long sampleRate;
     bool dcCorrected;
+    bool discontinuity;
+    bool hasTimestamp;
+    std::uint64_t sequence;
+    long long timeNs;
     int numChannels;
     std::vector<liquid_float_complex> data;
 
     SDRThreadIQData() :
-            frequency(0), sampleRate(DEFAULT_SAMPLE_RATE), dcCorrected(true), numChannels(0) {
+            frequency(0), sampleRate(DEFAULT_SAMPLE_RATE), dcCorrected(true), discontinuity(true),
+            hasTimestamp(false), sequence(0), timeNs(0), numChannels(0) {
 
     }
 
     SDRThreadIQData(long long bandwidth, long long frequency, std::vector<signed char> * /* data */) :
-            frequency(frequency), sampleRate(bandwidth), dcCorrected(false), numChannels(0) {
+            frequency(frequency), sampleRate(bandwidth), dcCorrected(false), discontinuity(true),
+            hasTimestamp(false), sequence(0), timeNs(0), numChannels(0) {
 
     }
 
@@ -110,6 +117,10 @@ protected:
     ReBuffer<SDRThreadIQData> buffers;
     SDRThreadIQData overflowBuffer;
     int numOverflow;
+    long long overflowTimeNs = 0;
+    bool overflowHasTimestamp = false;
+    std::uint64_t nextSequence = 0;
+    bool pendingDiscontinuity = true;
     std::atomic<DeviceConfig *> deviceConfig;
     std::atomic<SDRDeviceInfo *> deviceInfo;
     

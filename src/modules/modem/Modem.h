@@ -30,8 +30,9 @@ class ModemIQData {
 public:
     std::vector<liquid_float_complex> data;
     long long sampleRate;
+    bool discontinuity;
     
-    ModemIQData() : sampleRate(0) {
+    ModemIQData() : sampleRate(0), discontinuity(false) {
         
     }
     

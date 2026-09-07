@@ -23,8 +23,8 @@ void ModemST::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput * /
     auto *dkit = (ModemKitDigital *)kit;
     digitalStart(dkit, demodST, input);
 
-    for (size_t i = 0, bufSize = input->data.size(); i < bufSize; i++) {
-        modemcf_demodulate(demodST, input->data[i], &demodOutputDataDigital[i]);
+    for (size_t i = 0, bufSize = synchronizedInput.size(); i < bufSize; i++) {
+        modemcf_demodulate(demodST, synchronizedInput[i], &demodOutputDataDigital[i]);
     }
     updateDemodulatorLock(demodST, 0.005f);
     

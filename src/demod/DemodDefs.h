@@ -10,6 +10,7 @@
 #include <atomic>
 #include <mutex>
 #include <memory>
+#include <cstdint>
 
 #include "IOThread.h"
 
@@ -19,17 +20,25 @@ class DemodulatorThreadIQData {
 public:
     long long frequency;
     long long sampleRate;
+    bool discontinuity;
+    bool hasTimestamp;
+    std::uint64_t sequence;
+    long long timeNs;
     std::vector<liquid_float_complex> data;
    
 
     DemodulatorThreadIQData() :
-            frequency(0), sampleRate(0) {
+            frequency(0), sampleRate(0), discontinuity(true), hasTimestamp(false), sequence(0), timeNs(0) {
 
     }
 
     DemodulatorThreadIQData & operator=(const DemodulatorThreadIQData &other) {
         frequency = other.frequency;
         sampleRate = other.sampleRate;
+        discontinuity = other.discontinuity;
+        hasTimestamp = other.hasTimestamp;
+        sequence = other.sequence;
+        timeNs = other.timeNs;
         data.assign(other.data.begin(), other.data.end());
         return *this;
     }
@@ -45,13 +54,18 @@ public:
     std::vector<liquid_float_complex> data;
 
     long long sampleRate;
+    bool discontinuity;
+    bool hasTimestamp;
+    std::uint64_t sequence;
+    long long timeNs;
     std::string modemName;
     std::string modemType;
     Modem *modem;
     ModemKit *modemKit;
 
     DemodulatorThreadPostIQData() :
-            sampleRate(0), modem(nullptr), modemKit(nullptr) {
+            sampleRate(0), discontinuity(true), hasTimestamp(false), sequence(0), timeNs(0),
+            modem(nullptr), modemKit(nullptr) {
 
     }
 

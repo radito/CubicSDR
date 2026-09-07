@@ -119,6 +119,12 @@ void ModemGMSK::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput *
     
     digitalStart(dkit, nullptr, input);
 
+    if (input->discontinuity) {
+        dkit->inputBuffer.clear();
+        gmskdem_reset(dkit->demodGMSK);
+        setDemodulatorLock(false);
+    }
+
     dkit->inputBuffer.insert(dkit->inputBuffer.end(),input->data.begin(),input->data.end());
 
     const size_t symbolCount = dkit->inputBuffer.size() / dkit->sps;

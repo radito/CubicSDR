@@ -7,6 +7,7 @@
 #include <vector>
 #include <atomic>
 #include <memory>
+#include <cstdint>
 
 #include "CubicSDRDefs.h"
 #include "DemodDefs.h"
@@ -86,4 +87,7 @@ protected:
 
     DemodulatorThreadInputQueuePtr iqInputQueue;
     DemodulatorThreadPostInputQueuePtr iqOutputQueue;
+
+    bool haveInputSequence = false;
+    std::uint64_t lastInputSequence = 0;
 };

@@ -31,6 +31,12 @@ SDRPostThread::SDRPostThread() : IOThread(), buffers("SDRPostThreadBuffers"), vi
 
 
 SDRPostThread::~SDRPostThread() {
+    if (channelizer) {
+        firpfbch_crcf_destroy(channelizer);
+    }
+    if (channelizer2) {
+        firpfbch2_crcf_destroy(channelizer2);
+    }
     iirfilt_crcf_destroy(dcFilter);
 }
 
@@ -151,10 +157,9 @@ SDRPostThreadChannelizerType SDRPostThread::getChannelizerType() {
 
 void SDRPostThread::run() {
 #ifdef __APPLE__
-    pthread_t tID = pthread_self();  // ID of this thread
-    int priority = sched_get_priority_max( SCHED_FIFO);
-    sched_param prio = {priority}; // scheduling priority of thread
-    pthread_setschedparam(tID, SCHED_FIFO, &prio);
+    if (__builtin_available(macOS 10.10, *)) {
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
+    }
 #endif
 
 //    std::cout << "SDR post-processing thread started.." << std::endl;
@@ -184,6 +189,8 @@ void SDRPostThread::run() {
             } else {
                 runSingleCH(data_in.get());
             }
+            lastInputSequence = data_in->sequence;
+            haveInputSequence = true;
         }
         
         for (const auto& demod : runDemods) {
@@ -224,6 +231,11 @@ DemodulatorThreadIQDataPtr SDRPostThread::getFullSampleRateIqData(SDRThreadIQDat
 
     iqDataOut->frequency = data_in->frequency;
     iqDataOut->sampleRate = data_in->sampleRate;
+    iqDataOut->discontinuity = data_in->discontinuity ||
+        (haveInputSequence && data_in->sequence != lastInputSequence + 1);
+    iqDataOut->hasTimestamp = data_in->hasTimestamp;
+    iqDataOut->sequence = data_in->sequence;
+    iqDataOut->timeNs = data_in->timeNs;
     iqDataOut->data.assign(data_in->data.begin(), data_in->data.begin() + data_in->data.size());
 
     return iqDataOut;
@@ -247,6 +259,8 @@ void SDRPostThread::pushVisualData(const DemodulatorThreadIQDataPtr& iqDataOut) 
 // Run without any processing; each demod gets the full SDR bandwidth to handle on it's own
 void SDRPostThread::runSingleCH(SDRThreadIQData *data_in) {
     bool refreshed = false;
+    const bool inputGap = data_in->discontinuity ||
+        (haveInputSequence && data_in->sequence != lastInputSequence + 1);
     
     if (sampleRate != data_in->sampleRate || doRefresh.load()) {
         sampleRate = data_in->sampleRate;
@@ -257,6 +271,10 @@ void SDRPostThread::runSingleCH(SDRThreadIQData *data_in) {
     if (refreshed || frequency != data_in->frequency) {
         frequency = data_in->frequency;
         updateActiveDemodulators();
+    }
+
+    if (inputGap || refreshed) {
+        iirfilt_crcf_reset(dcFilter);
     }
     
     size_t outSize = data_in->data.size();
@@ -272,6 +290,10 @@ void SDRPostThread::runSingleCH(SDRThreadIQData *data_in) {
 
     demodDataOut->frequency = frequency;
     demodDataOut->sampleRate = sampleRate;
+    demodDataOut->discontinuity = inputGap;
+    demodDataOut->hasTimestamp = data_in->hasTimestamp;
+    demodDataOut->sequence = data_in->sequence;
+    demodDataOut->timeNs = data_in->timeNs;
     
     if (demodDataOut->data.size() != outSize) {
         if (demodDataOut->data.capacity() < outSize) {
@@ -280,8 +302,12 @@ void SDRPostThread::runSingleCH(SDRThreadIQData *data_in) {
         demodDataOut->data.resize(outSize);
     }
     
-    //Only 1 channel, apply DC blocker.
-    iirfilt_crcf_execute_block(dcFilter, &data_in->data[0], data_in->data.size(), &demodDataOut->data[0]);
+    // Avoid filtering twice when the device already corrected its DC offset.
+    if (data_in->dcCorrected) {
+        std::copy(data_in->data.begin(), data_in->data.end(), demodDataOut->data.begin());
+    } else {
+        iirfilt_crcf_execute_block(dcFilter, &data_in->data[0], data_in->data.size(), &demodDataOut->data[0]);
+    }
 
     //push the DC-corrected data as Main Spactrum + Waterfall data.
     pushVisualData(demodDataOut);
@@ -342,6 +368,10 @@ void SDRPostThread::runDemodChannels(int channelBandwidth) {
         DemodulatorThreadIQDataPtr demodDataOut = buffers.getBuffer();
         demodDataOut->frequency = chanCenters[i];
         demodDataOut->sampleRate = channelBandwidth;
+        demodDataOut->discontinuity = inputDiscontinuity;
+        demodDataOut->hasTimestamp = inputHasTimestamp;
+        demodDataOut->sequence = inputSequence;
+        demodDataOut->timeNs = inputTimeNs;
 
         // Resize and update capacity of buffer if necessary
         if (demodDataOut->data.size() != chanDataSize) {
@@ -361,7 +391,7 @@ void SDRPostThread::runDemodChannels(int channelBandwidth) {
         }
         
         // prepare channel data buffer
-        if (i == 0) {   // Channel 0 requires DC correction
+        if (i == 0 && !inputDCCorrected) {   // Channel 0 requires DC correction
             // Update DC Buffer size if needed
             if (dcBuf.size() != chanDataSize) {
                 dcBuf.resize(chanDataSize);
@@ -404,6 +434,8 @@ void SDRPostThread::initPFBCH() {
         firpfbch_crcf_destroy(channelizer);
     }
     channelizer = firpfbch_crcf_create_kaiser(LIQUID_ANALYZER, numChannels, 4, 60);
+    channelizerInput.clear();
+    iirfilt_crcf_reset(dcFilter);
     
     chanBw = (sampleRate / numChannels);
     
@@ -414,6 +446,12 @@ void SDRPostThread::initPFBCH() {
 }
 
 void SDRPostThread::runPFBCH(SDRThreadIQData *data_in) {
+    inputDiscontinuity = data_in->discontinuity ||
+        (haveInputSequence && data_in->sequence != lastInputSequence + 1);
+    pendingChannelizerDiscontinuity = pendingChannelizerDiscontinuity || inputDiscontinuity;
+    inputHasTimestamp = data_in->hasTimestamp;
+    inputSequence = data_in->sequence;
+    inputTimeNs = data_in->timeNs;
     bool refreshed = false;
     if (numChannels != data_in->numChannels || sampleRate != data_in->sampleRate || chanMode != lastChanMode || doRefresh.load()) {
         numChannels = data_in->numChannels;
@@ -421,6 +459,12 @@ void SDRPostThread::runPFBCH(SDRThreadIQData *data_in) {
         initPFBCH();
         lastChanMode = 1;
         refreshed = true;
+        pendingChannelizerDiscontinuity = true;
+    }
+    if (inputDiscontinuity && !refreshed) {
+        channelizerInput.clear();
+        firpfbch_crcf_reset(channelizer);
+        iirfilt_crcf_reset(dcFilter);
     }
     
     if (refreshed || frequency != data_in->frequency) {
@@ -433,7 +477,10 @@ void SDRPostThread::runPFBCH(SDRThreadIQData *data_in) {
     DemodulatorThreadIQDataPtr fullSampleRateIQ = getFullSampleRateIqData(data_in);
     pushVisualData(fullSampleRateIQ);
     
-    size_t outSize = data_in->data.size();
+    inputDCCorrected = data_in->dcCorrected;
+    channelizerInput.insert(channelizerInput.end(), data_in->data.begin(), data_in->data.end());
+    const size_t blockSize = static_cast<size_t>(numChannels);
+    const size_t outSize = (channelizerInput.size() / blockSize) * blockSize;
     
     if (outSize > dataOut.capacity()) {
         dataOut.reserve(outSize);
@@ -443,14 +490,20 @@ void SDRPostThread::runPFBCH(SDRThreadIQData *data_in) {
     }
     
     // Find active demodulators
-    if (!runDemods.empty()) {
+    if (!runDemods.empty() && outSize != 0) {
+        inputDiscontinuity = pendingChannelizerDiscontinuity;
         // Channelize data
         // firpfbch produces [numChannels] interleaved output samples for every [numChannels] samples
-        for (int i = 0, iMax = data_in->data.size(); i < iMax; i+=numChannels) {
-            firpfbch_crcf_analyzer_execute(channelizer, &data_in->data[i], &dataOut[i]);
+        for (size_t i = 0; i < outSize; i += blockSize) {
+            firpfbch_crcf_analyzer_execute(channelizer, &channelizerInput[i], &dataOut[i]);
         }
         
         runDemodChannels(chanBw);
+        pendingChannelizerDiscontinuity = false;
+    }
+
+    if (outSize != 0) {
+        channelizerInput.erase(channelizerInput.begin(), channelizerInput.begin() + outSize);
     }
 }
 
@@ -461,6 +514,8 @@ void SDRPostThread::initPFBCH2() {
         firpfbch2_crcf_destroy(channelizer2);
     }
     channelizer2 = firpfbch2_crcf_create_kaiser(LIQUID_ANALYZER, numChannels, 4, 60);
+    channelizerInput.clear();
+    iirfilt_crcf_reset(dcFilter);
     
     chanBw = (sampleRate / numChannels);
     
@@ -470,6 +525,12 @@ void SDRPostThread::initPFBCH2() {
 }
 
 void SDRPostThread::runPFBCH2(SDRThreadIQData *data_in) {
+    inputDiscontinuity = data_in->discontinuity ||
+        (haveInputSequence && data_in->sequence != lastInputSequence + 1);
+    pendingChannelizerDiscontinuity = pendingChannelizerDiscontinuity || inputDiscontinuity;
+    inputHasTimestamp = data_in->hasTimestamp;
+    inputSequence = data_in->sequence;
+    inputTimeNs = data_in->timeNs;
     bool refreshed = false;
     if (numChannels != data_in->numChannels || sampleRate != data_in->sampleRate || chanMode != lastChanMode || doRefresh.load()) {
         numChannels = data_in->numChannels;
@@ -477,6 +538,12 @@ void SDRPostThread::runPFBCH2(SDRThreadIQData *data_in) {
         initPFBCH2();
         lastChanMode = 2;
         refreshed = true;
+        pendingChannelizerDiscontinuity = true;
+    }
+    if (inputDiscontinuity && !refreshed) {
+        channelizerInput.clear();
+        firpfbch2_crcf_reset(channelizer2);
+        iirfilt_crcf_reset(dcFilter);
     }
 
     if (refreshed || frequency != data_in->frequency) {
@@ -489,7 +556,11 @@ void SDRPostThread::runPFBCH2(SDRThreadIQData *data_in) {
     DemodulatorThreadIQDataPtr fullSampleRateIQ = getFullSampleRateIqData(data_in);
     pushVisualData(fullSampleRateIQ);
     
-    size_t outSize = data_in->data.size() * 2;
+    inputDCCorrected = data_in->dcCorrected;
+    channelizerInput.insert(channelizerInput.end(), data_in->data.begin(), data_in->data.end());
+    const size_t inputBlockSize = static_cast<size_t>(numChannels / 2);
+    const size_t inputSize = (channelizerInput.size() / inputBlockSize) * inputBlockSize;
+    const size_t outSize = inputSize * 2;
     
     if (outSize > dataOut.capacity()) {
         dataOut.reserve(outSize);
@@ -499,13 +570,19 @@ void SDRPostThread::runPFBCH2(SDRThreadIQData *data_in) {
     }
     
     // Find active demodulators
-    if (!runDemods.empty()) {
+    if (!runDemods.empty() && inputSize != 0) {
+        inputDiscontinuity = pendingChannelizerDiscontinuity;
         // Channelize data
         // firpfbch2 produces [numChannels] interleaved output samples for every [numChannels/2] input samples
-        for (int i = 0, iMax = data_in->data.size(); i < iMax; i += numChannels/2) {
-            firpfbch2_crcf_execute(channelizer2, &data_in->data[i], &dataOut[i*2]);
+        for (size_t i = 0; i < inputSize; i += inputBlockSize) {
+            firpfbch2_crcf_execute(channelizer2, &channelizerInput[i], &dataOut[i * 2]);
         }
         
         runDemodChannels(chanBw * 2);
+        pendingChannelizerDiscontinuity = false;
+    }
+
+    if (inputSize != 0) {
+        channelizerInput.erase(channelizerInput.begin(), channelizerInput.begin() + inputSize);
     }
 }

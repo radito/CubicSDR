@@ -52,6 +52,8 @@ ModemArgInfoList ModemAPSK::getSettings() {
     consOpts.push_back("256");
     consArg.options = consOpts;
     args.push_back(consArg);
+    ModemArgInfoList tracking = ModemDigital::getSettings();
+    args.insert(args.end(), tracking.begin(), tracking.end());
     
     return args;
 }
@@ -60,6 +62,8 @@ void ModemAPSK::writeSetting(std::string setting, std::string value) {
     if (setting == "cons") {
         int newCons = std::stoi(value);
         updateDemodulatorCons(newCons);
+    } else {
+        ModemDigital::writeSetting(setting, value);
     }
 }
 
@@ -67,7 +71,7 @@ std::string ModemAPSK::readSetting(std::string setting) {
     if (setting == "cons") {
         return std::to_string(cons);
     }
-    return "";
+    return ModemDigital::readSetting(setting);
 }
 
 void ModemAPSK::updateDemodulatorCons(int cons_in) {
@@ -102,8 +106,8 @@ void ModemAPSK::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput *
     
     digitalStart(dkit, demodAPSK, input);
     
-    for (size_t i = 0, bufSize = input->data.size(); i < bufSize; i++) {
-        modemcf_demodulate(demodAPSK, input->data[i], &demodOutputDataDigital[i]);
+    for (size_t i = 0, bufSize = synchronizedInput.size(); i < bufSize; i++) {
+        modemcf_demodulate(demodAPSK, synchronizedInput[i], &demodOutputDataDigital[i]);
     }
     
     updateDemodulatorLock(demodAPSK, 0.005f);

@@ -93,6 +93,8 @@ private:
     std::vector<double> fft_result_maa;
     std::vector<double> fft_result_peak;
     std::vector<double> fft_result_temp;
+    std::vector<float> fftWindow;
+    double fftPowerScale = 1.0;
     
     msresamp_crcf resampler;
     double resamplerRatio;

@@ -7,9 +7,11 @@
 #include <atomic>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <queue>
 #include <string>
 #include <vector>
+#include <cstddef>
 
 #include "DemodDefs.h"
 #include "RtAudio.h"
@@ -29,12 +31,13 @@ class AudioThreadInput {
   int type{};
   bool is_squelch_active{};
   bool is_denoised{};
+  bool discontinuity{};
 
   std::vector<float> data;
   std::vector<float> dataOut;
 
   AudioThreadInput()
-      : frequency(0), inputRate(0), sampleRate(0), channels(0), peak(0), type(0), is_squelch_active(false), is_denoised(false) {}
+      : frequency(0), inputRate(0), sampleRate(0), channels(0), peak(0), type(0), is_squelch_active(false), is_denoised(false), discontinuity(false) {}
 
   explicit AudioThreadInput(AudioThreadInput* copyFrom) { copy(copyFrom); }
 
@@ -47,6 +50,7 @@ class AudioThreadInput {
     type = copyFrom->type;
     is_squelch_active = copyFrom->is_squelch_active;
     is_denoised = copyFrom->is_denoised;
+    discontinuity = copyFrom->discontinuity;
     data.assign(copyFrom->data.begin(), copyFrom->data.end());
   }
 
@@ -75,8 +79,54 @@ typedef ThreadBlockingQueue<AudioThreadCommand> AudioThreadCommandQueue;
 typedef std::shared_ptr<AudioThreadInputQueue> AudioThreadInputQueuePtr;
 typedef std::shared_ptr<AudioThreadCommandQueue> AudioThreadCommandQueuePtr;
 
+class AudioStereoRing {
+ public:
+  explicit AudioStereoRing(size_t capacityFrames = 32768);
+  bool push(float left, float right);
+  bool pop(float& left, float& right);
+  // Called by the consumer; also applies any producer-requested flush.
+  size_t available();
+  // Observes logical fill without modifying the consumer cursor.
+  size_t producerAvailable() const;
+  size_t capacity() const;
+  void clear();
+
+ private:
+  std::vector<float> samples;
+  const size_t capacityFrames;
+  std::atomic<size_t> readPosition{0};
+  std::atomic<size_t> writePosition{0};
+  std::atomic<size_t> discardBefore{0};
+};
+
+class AudioMixState {
+ public:
+  void queue(const AudioThreadInput& input);
+  void clear();
+
+  AudioStereoRing ring;
+  std::atomic_bool active{false};
+  std::atomic_bool primed{false};
+  std::atomic<float> gain{1.0f};
+  std::atomic_int sampleRate{0};
+  std::atomic_size_t overflows{0};
+  std::atomic_size_t underflows{0};
+
+ private:
+  void clearUnlocked();
+
+  std::mutex producerMutex;
+  bool havePrevious = false;
+  float previousLeft = 0.0f;
+  float previousRight = 0.0f;
+  double phase = 0.0;
+  int resamplerInputRate = 0;
+  int resamplerOutputRate = 0;
+};
+
 class AudioThread : public IOThread {
  public:
+  static constexpr size_t MAX_MIX_SOURCES = 64;
   AudioThread();
   ~AudioThread() override;
 
@@ -111,14 +161,24 @@ class AudioThread : public IOThread {
   void attachControllerThread(std::thread* controllerThread);
 
   // fields below, only to be used by other AudioThreads !
-  size_t underflowCount;
+  std::atomic_size_t underflowCount;
   // protected by m_mutex
   std::vector<AudioThread*> boundThreads;
   AudioThreadInputQueuePtr inputQueue;
-  AudioThreadInputQueue playbackQueue;
-  AudioThreadInputPtr currentInput;
-  size_t audioQueuePtr;
-  float gain;
+
+  AudioMixState* getMixSource(size_t index) const {
+    return mixSources[index].load(std::memory_order_acquire);
+  }
+  AudioMixState* protectMixSource(size_t index) {
+    for (;;) {
+      AudioMixState* state = mixSources[index].load(std::memory_order_seq_cst);
+      mixHazards[index].store(state, std::memory_order_seq_cst);
+      if (mixSources[index].load(std::memory_order_seq_cst) == state) return state;
+    }
+  }
+  void releaseMixSource(size_t index) {
+    mixHazards[index].store(nullptr, std::memory_order_seq_cst);
+  }
 
   int debug;
 
@@ -141,6 +201,10 @@ class AudioThread : public IOThread {
 
   // The own m_mutex protecting this AudioThread, in particular boundThreads
   std::recursive_mutex m_mutex;
+  std::shared_ptr<AudioMixState> mixState;
+  std::array<std::atomic<AudioMixState*>, MAX_MIX_SOURCES> mixSources{};
+  std::array<std::atomic<AudioMixState*>, MAX_MIX_SOURCES> mixHazards{};
+  std::vector<std::shared_ptr<AudioMixState>> mixStateOwners;
 
   // RNNoise runs on the per-demodulator AudioThread, outside CoreAudio's
   // real-time callback.

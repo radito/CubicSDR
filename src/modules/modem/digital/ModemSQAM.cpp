@@ -37,6 +37,8 @@ ModemArgInfoList ModemSQAM::getSettings() {
     consOpts.push_back("128");
     consArg.options = consOpts;
     args.push_back(consArg);
+    ModemArgInfoList tracking = ModemDigital::getSettings();
+    args.insert(args.end(), tracking.begin(), tracking.end());
     
     return args;
 }
@@ -45,6 +47,8 @@ void ModemSQAM::writeSetting(std::string setting, std::string value) {
     if (setting == "cons") {
         int newCons = std::stoi(value);
         updateDemodulatorCons(newCons);
+    } else {
+        ModemDigital::writeSetting(setting, value);
     }
 }
 
@@ -52,7 +56,7 @@ std::string ModemSQAM::readSetting(std::string setting) {
     if (setting == "cons") {
         return std::to_string(cons);
     }
-    return "";
+    return ModemDigital::readSetting(setting);
 }
 
 void ModemSQAM::updateDemodulatorCons(int cons_in) {
@@ -72,8 +76,8 @@ void ModemSQAM::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput *
 
     digitalStart(dkit, demodSQAM, input);
     
-    for (size_t i = 0, bufSize = input->data.size(); i < bufSize; i++) {
-        modemcf_demodulate(demodSQAM, input->data[i], &demodOutputDataDigital[i]);
+    for (size_t i = 0, bufSize = synchronizedInput.size(); i < bufSize; i++) {
+        modemcf_demodulate(demodSQAM, synchronizedInput[i], &demodOutputDataDigital[i]);
     }
     updateDemodulatorLock(demodSQAM, 0.005f);
     

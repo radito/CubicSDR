@@ -3,6 +3,7 @@
 
 #include "SpectrumPanel.h"
 
+#include <cmath>
 #include <iostream>
 #include <iomanip>
 #include "CubicSDR.h"
@@ -284,8 +285,12 @@ void SpectrumPanel::drawPanelContents() {
         float dbOfs = useDbOfs?wxGetApp().getConfig()->getDBOffset():0;
         
         std::stringstream ssLabel("");
-        if (getCeilValue() != getFloorValue() && fftSize) {
-            ssLabel << std::fixed << std::setprecision(1) << (dbOfs + 20.0 * log10(2.0*(getCeilValue())/(double)fftSize)) << "dB";
+        const float ceilingDb = getCeilValue();
+        const float floorDb = getFloorValue();
+        if (ceilingDb != floorDb && std::isfinite(ceilingDb) && std::isfinite(floorDb)) {
+            // Spectrum processors publish calibrated logarithmic power now;
+            // applying log10() here again is invalid for negative dB values.
+            ssLabel << std::fixed << std::setprecision(1) << (dbOfs + ceilingDb) << "dB";
         }
         dbPanelCeil.setText(ssLabel.str(), GLFont::GLFONT_ALIGN_RIGHT);
         dbPanelCeil.setSize(dbPanelWidth, dbPanelHeight);
@@ -293,8 +298,8 @@ void SpectrumPanel::drawPanelContents() {
 
         
         ssLabel.str("");
-        if (getCeilValue() != getFloorValue() && fftSize) {
-            ssLabel <<  (dbOfs + 20.0 * log10(2.0*(getFloorValue())/(double)fftSize)) << "dB";
+        if (ceilingDb != floorDb && std::isfinite(ceilingDb) && std::isfinite(floorDb)) {
+            ssLabel << std::fixed << std::setprecision(1) << (dbOfs + floorDb) << "dB";
         }
 
         dbPanelFloor.setText(ssLabel.str(), GLFont::GLFONT_ALIGN_RIGHT);

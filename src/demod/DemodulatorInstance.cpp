@@ -59,9 +59,9 @@ DemodulatorInstance::DemodulatorInstance() {
     user_label.store(new std::wstring());
 
     pipeIQInputData = std::make_shared<DemodulatorThreadInputQueue>();
-    pipeIQInputData->set_max_num_items(100);
+    pipeIQInputData->set_max_num_items(8);
     pipeIQDemodData = std::make_shared< DemodulatorThreadPostInputQueue>();
-    pipeIQDemodData->set_max_num_items(100);
+    pipeIQDemodData->set_max_num_items(8);
     
     audioThread = new AudioThread();
     audioThread->setDenoiseEnabled(wxGetApp().getDenoiseMode());
@@ -71,7 +71,7 @@ DemodulatorInstance::DemodulatorInstance() {
     demodulatorPreThread->setOutputQueue("IQDataOutput",pipeIQDemodData);
             
     pipeAudioData = std::make_shared<AudioThreadInputQueue>();
-    pipeAudioData->set_max_num_items(100);
+    pipeAudioData->set_max_num_items(8);
 
     demodulatorThread = new DemodulatorThread(this);
     demodulatorThread->setInputQueue("IQDataInput",pipeIQDemodData);
@@ -243,12 +243,8 @@ bool DemodulatorInstance::isTerminated() {
     if (audioTerminated) {
 
         if (t_Audio) {
-#ifdef __APPLE__
-            pthread_join(t_PreDemod, NULL);
-#else
             t_Audio->join();
             delete t_Audio;
-#endif
             t_Audio = nullptr;
         }
     }

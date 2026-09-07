@@ -4,6 +4,7 @@
 #include "DemodulatorThread.h"
 
 #include <chrono>
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -28,16 +29,21 @@ DemodulatorThread::DemodulatorThread(DemodulatorInstance* parent)
       demodInstance(parent),
       outputBuffers("DemodulatorThreadBuffers"),
       muted(false),
+      denoise(wxGetApp().getDenoiseMode()),
       squelchLevel(-100),
       signalLevel(-100),
       signalFloor(-30),
       signalCeil(30),
       squelchEnabled(false),
       squelchBreak(false),
-      denoise(wxGetApp().getDenoiseMode()) {}
+      lastSquelchTime(0) {}
 
 DemodulatorThread::~DemodulatorThread() {
   releaseSquelchLock(demodInstance);
+  if (cModem && cModemKit) {
+    cModem->disposeKit(cModemKit);
+  }
+  delete cModem;
 }
 
 void DemodulatorThread::onBindOutput(std::string name, ThreadQueueBasePtr threadQueue) {
@@ -72,16 +78,16 @@ double DemodulatorThread::linearToDb(double linear) {
   return 20.0 * log10(linear);
 }
 
-int DemodulatorThread::getEpochMs() {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+std::int64_t DemodulatorThread::getEpochMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 void DemodulatorThread::run() {
 #ifdef __APPLE__
-  pthread_t tID = pthread_self();  // ID of this thread
-  int priority = sched_get_priority_max(SCHED_FIFO) - 1;
-  sched_param prio = {priority};  // scheduling priority of thread
-  pthread_setschedparam(tID, SCHED_FIFO, &prio);
+  if (__builtin_available(macOS 10.10, *)) {
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+  }
 #endif
 
   //    std::cout << "Demodulator thread started.." << std::endl;
@@ -125,6 +131,7 @@ void DemodulatorThread::run() {
     inputData = &inp->data;
 
     modemData.sampleRate = inp->sampleRate;
+    modemData.discontinuity = inp->discontinuity;
     modemData.data.assign(inputData->begin(), inputData->end());
 
     AudioThreadInputPtr ati = nullptr;
@@ -147,25 +154,19 @@ void DemodulatorThread::run() {
 
     cModem->demodulate(cModemKit, &modemData, ati.get());
 
-    double currentSignalLevel = 0;
-    double sampleTime = double(inp->data.size()) / double(inp->sampleRate);
+    double power = 0.0;
+    for (const auto &sample : inp->data) {
+      const double real = sample.real;
+      const double imag = sample.imag;
+      power += real * real + imag * imag;
+    }
+    double currentSignalLevel = 10.0 * std::log10(
+        std::max(power / static_cast<double>(inp->data.size()), 1.0e-20));
+    double sampleTime = inp->sampleRate > 0
+        ? double(inp->data.size()) / double(inp->sampleRate)
+        : 0.0;
 
-    if (audioOutputQueue != nullptr && ati && !ati->data.empty()) {
-      double accum = 0;
-
-      if (cModem->useSignalOutput() && false) {
-        for (auto i : ati->data) {
-          accum += abMagnitude(i, 0.0);
-        }
-
-        currentSignalLevel = linearToDb(accum / double(ati->data.size()));
-      } else {
-        for (auto i : inp->data) {
-          accum += abMagnitude(i.real, i.imag);
-        }
-
-        currentSignalLevel = linearToDb(accum / double(inp->data.size()));
-      }
+    {
 
       float sf = signalFloor, sc = signalCeil, sl = squelchLevel;
 
@@ -198,14 +199,15 @@ void DemodulatorThread::run() {
       signalLevel = signalLevel + (currentSignalLevel - signalLevel) * 0.05 * sampleTime * 30.0;
     }
 
-    int currEpoch = getEpochMs();
-    int devEpoch = currEpoch - lastSquelchTime;
-
-    bool squelched = squelchEnabled && (currentSignalLevel < squelchLevel) && (devEpoch > 500);
+    const std::int64_t currEpoch = getEpochMs();
+    bool squelched = false;
 
     if (squelchEnabled) {
-      if (!squelched && !squelchBreak) {
-        lastSquelchTime = getEpochMs();
+      const float closeLevel = squelchLevel.load();
+      const float openLevel = closeLevel + 2.0f;
+
+      if (!squelchBreak && currentSignalLevel >= openLevel) {
+        lastSquelchTime = currEpoch;
 
         if (wxGetApp().getSoloMode() && !wxGetApp().getAppFrame()->isUserDemodBusy()) {
           std::lock_guard<std::mutex> lock(squelchLockMutex);
@@ -220,10 +222,18 @@ void DemodulatorThread::run() {
           squelchBreak = true;
           demodInstance->getVisualCue()->triggerSquelchBreak(120);
         }
-      } else if (squelched && squelchBreak) {
-        releaseSquelchLock(demodInstance);
-        squelchBreak = false;
       }
+
+      if (squelchBreak) {
+        if (currentSignalLevel >= closeLevel) {
+          lastSquelchTime = currEpoch;
+        } else if (currEpoch - lastSquelchTime.load() > 500) {
+          releaseSquelchLock(demodInstance);
+          squelchBreak = false;
+        }
+      }
+
+      squelched = !squelchBreak;
     }
 
     // compute audio peak:
@@ -242,6 +252,7 @@ void DemodulatorThread::run() {
     if (ati) {
       ati->is_squelch_active = squelched;
       ati->is_denoised = denoise;
+      ati->discontinuity = inp->discontinuity;
     }
 
     // At that point, capture the current state of audioVisOutputQueue in a local
@@ -326,14 +337,22 @@ void DemodulatorThread::run() {
 
     if (!squelched && ati != nullptr) {
       if (!muted && (!wxGetApp().getSoloMode() || (demodInstance == wxGetApp().getDemodMgr().getCurrentModem().get()))) {
+        ati->discontinuity = ati->discontinuity || pendingAudioDiscontinuity;
         // non-blocking push needed for audio out
         if (!audioOutputQueue->try_push(ati)) {
+          pendingAudioDiscontinuity = true;
           std::cout << "DemodulatorThread::run() cannot push ati into "
                        "audioOutputQueue, is full !"
                     << std::endl;
           std::this_thread::yield();
+        } else {
+          pendingAudioDiscontinuity = false;
         }
+      } else {
+        pendingAudioDiscontinuity = true;
       }
+    } else if (ati != nullptr) {
+      pendingAudioDiscontinuity = true;
     }
 
     // Capture audioSinkOutputQueue state in a local variable
@@ -400,6 +419,10 @@ float DemodulatorThread::getSignalCeil() {
 
 void DemodulatorThread::setSquelchEnabled(bool squelchEnabled_in) {
   squelchEnabled = squelchEnabled_in;
+  if (!squelchEnabled_in) {
+    releaseSquelchLock(demodInstance);
+    squelchBreak = false;
+  }
 }
 
 bool DemodulatorThread::isSquelchEnabled() {

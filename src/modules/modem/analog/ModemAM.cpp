@@ -36,6 +36,10 @@ void ModemAM::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput* au
         return;
     }
 
+    if (input->discontinuity) {
+        firfilt_rrrf_reset(mDCBlock);
+    }
+
   // Implement an AM demodulator. Compute signal
   // amplitude followed by a DC blocker to remove
   // the DC offset. 

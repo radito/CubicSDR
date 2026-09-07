@@ -61,10 +61,14 @@ void exerciseSimpleDigitalModem(const std::string& expectedName) {
 template <typename ModemType>
 void exerciseConstellationSetting(const std::string& initial, const std::string& changed) {
     ModemType modem;
-    CUBIC_REQUIRE(modem.getSettings().size() == 1);
+    CUBIC_REQUIRE(modem.getSettings().size() == 3);
     CUBIC_REQUIRE(modem.readSetting("cons") == initial);
     modem.writeSetting("cons", changed);
+    modem.writeSetting("sps", "4");
+    modem.writeSetting("beta", "0.25");
     CUBIC_REQUIRE(modem.readSetting("cons") == changed);
+    CUBIC_REQUIRE(modem.readSetting("sps") == "4");
+    CUBIC_REQUIRE(std::stof(modem.readSetting("beta")) == 0.25f);
 }
 
 } // namespace

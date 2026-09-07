@@ -1,14 +1,17 @@
 add_executable(CubicSDRTests
     TestMain.cpp
     AnalogModemTests.cpp
+    AudioMixerTests.cpp
     DataTreeTests.cpp
     IOAndProcessingTests.cpp
     ModemIQTests.cpp
     SampleFrameAccumulatorTests.cpp
     SDRDataTests.cpp
+    SpectrumVisualProcessorTests.cpp
     ThreadBlockingQueueTests.cpp
     UtilityTests.cpp
     ${PROJECT_SOURCE_DIR}/src/IOThread.cpp
+    ${PROJECT_SOURCE_DIR}/src/audio/AudioMixer.cpp
     ${PROJECT_SOURCE_DIR}/src/modules/modem/Modem.cpp
     ${PROJECT_SOURCE_DIR}/src/modules/modem/ModemAnalog.cpp
     ${PROJECT_SOURCE_DIR}/src/modules/modem/analog/ModemAM.cpp
@@ -21,6 +24,7 @@ add_executable(CubicSDRTests
     ${PROJECT_SOURCE_DIR}/src/modules/modem/analog/ModemNBFM.cpp
     ${PROJECT_SOURCE_DIR}/src/modules/modem/analog/ModemUSB.cpp
     ${PROJECT_SOURCE_DIR}/src/process/FFTDataDistributor.cpp
+    ${PROJECT_SOURCE_DIR}/src/process/SpectrumVisualProcessor.cpp
     ${PROJECT_SOURCE_DIR}/src/sdr/SDRDeviceInfo.cpp
     ${PROJECT_SOURCE_DIR}/src/util/DataTree.cpp
     ${PROJECT_SOURCE_DIR}/src/util/Gradient.cpp

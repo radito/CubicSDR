@@ -3,6 +3,8 @@
 
 #include "ScopeVisualProcessor.h"
 #include <cstring>
+#include <algorithm>
+#include <limits>
 
 ScopeVisualProcessor::ScopeVisualProcessor(): outputBuffers("ScopeVisualProcessorBuffers") {
     scopeEnabled.store(true);
@@ -27,6 +29,22 @@ void ScopeVisualProcessor::setup(int fftSize_in) {
  
     fftInData.resize(fftSize);
     fftOutput.resize(fftSize);
+    fftWindow.resize(fftSize);
+
+    double windowEnergy = 0.0;
+    for (int i = 0; i < fftSize; ++i) {
+        const float value = fftSize > 1
+            ? 0.5f - 0.5f * std::cos(6.28318530717958647692 * static_cast<double>(i) /
+                                     static_cast<double>(fftSize - 1))
+            : 1.0f;
+        fftWindow[i] = value;
+        windowEnergy += static_cast<double>(value) * value;
+    }
+    fftPowerScale = windowEnergy > 0.0
+        ? 1.0 / (static_cast<double>(fftSize) * windowEnergy)
+        : 1.0;
+    fft_ceil_ma = fft_ceil_maa = std::numeric_limits<double>::quiet_NaN();
+    fft_floor_ma = fft_floor_maa = std::numeric_limits<double>::quiet_NaN();
 
     if (fftPlan) {
         fft_destroy_plan(fftPlan);
@@ -152,7 +170,13 @@ void ScopeVisualProcessor::process() {
             
             audioInputData = nullptr; //->decRefCount();
 
-            double fft_ceil = 0, fft_floor = 1;
+            for (i = 0; i < static_cast<size_t>(fftSize); ++i) {
+                fftInData[i].real *= fftWindow[i];
+                fftInData[i].imag *= fftWindow[i];
+            }
+
+            double fft_ceil = 0.0;
+            double fft_floor = std::numeric_limits<double>::max();
             
             if (fft_result.size() < (fftSize/2)) {
                 fft_result.resize((fftSize/2));
@@ -167,9 +191,7 @@ void ScopeVisualProcessor::process() {
                 double a = (double) fftOutput[i].real;
                 double b = (double) fftOutput[i].imag;
 
-                //computes norm = sqrt(a**2 + b**2)
-                //being actually floats cast into doubles, we are indeed overflow-free here.
-                fft_result[i] = sqrt(a*a + b*b);
+                fft_result[i] = (a * a + b * b) * fftPowerScale;
             }
             
             for (i = 0; i < (fftSize/2); i++) {
@@ -184,10 +206,14 @@ void ScopeVisualProcessor::process() {
                 }
             }
 
+            if (!std::isfinite(fft_ceil_ma)) fft_ceil_ma = fft_ceil;
             fft_ceil_ma = fft_ceil_ma + (fft_ceil - fft_ceil_ma) * 0.05;
+            if (!std::isfinite(fft_ceil_maa)) fft_ceil_maa = fft_ceil_ma;
             fft_ceil_maa = fft_ceil_maa + (fft_ceil_ma - fft_ceil_maa) * 0.05;
             
+            if (!std::isfinite(fft_floor_ma)) fft_floor_ma = fft_floor;
             fft_floor_ma = fft_floor_ma + (fft_floor - fft_floor_ma) * 0.05;
+            if (!std::isfinite(fft_floor_maa)) fft_floor_maa = fft_floor_ma;
             fft_floor_maa = fft_floor_maa + (fft_floor_ma - fft_floor_maa) * 0.05;
 
             unsigned int outSize = fftSize/2;
@@ -200,14 +226,18 @@ void ScopeVisualProcessor::process() {
                 renderData->waveform_points.resize(outSize*2);
             }
             
+            const double floorDb = 10.0 * std::log10(std::max(fft_floor_maa, 1.0e-20));
+            const double ceilDb = 10.0 * std::log10(std::max(fft_ceil_maa, 1.0e-20));
+            const double rangeDb = std::max(ceilDb - floorDb, 10.0);
             for (i = 0; i < outSize; i++) {
-                float v = (log10(fft_result_maa[i]+0.25 - (fft_floor_maa-0.75)) / log10((fft_ceil_maa+0.25) - (fft_floor_maa-0.75)));
+                const double binDb = 10.0 * std::log10(std::max(fft_result_maa[i], 1.0e-20));
+                float v = static_cast<float>(std::clamp((binDb - floorDb) / rangeDb, 0.0, 1.0));
                 renderData->waveform_points[i * 2] = ((double) i / (double) (outSize));
                 renderData->waveform_points[i * 2 + 1] = v;
             }
             
-            renderData->fft_floor = fft_floor_maa;
-            renderData->fft_ceil = fft_ceil_maa;
+            renderData->fft_floor = floorDb;
+            renderData->fft_ceil = ceilDb;
             renderData->fft_size = fftSize/2;
             renderData->spectrum = true;
 

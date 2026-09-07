@@ -33,6 +33,11 @@ void ModemDSB::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput *a
        
         return;
     }
+
+
+    if (input->discontinuity) {
+        ampmodem_reset(demodAM_DSB);
+    }
     
 	for (size_t i = 0; i < bufSize; i++) {
 		ampmodem_demodulate(demodAM_DSB, input->data[i], &demodOutputData[i]);

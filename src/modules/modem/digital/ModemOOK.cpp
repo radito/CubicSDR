@@ -30,8 +30,8 @@ void ModemOOK::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput * 
     auto *dkit = (ModemKitDigital *)kit;
     digitalStart(dkit, demodOOK, input);
    
-    for (size_t i = 0, bufSize=input->data.size(); i < bufSize; i++) {
-        modemcf_demodulate(demodOOK, input->data[i], &demodOutputDataDigital[i]);
+    for (size_t i = 0, bufSize=synchronizedInput.size(); i < bufSize; i++) {
+        modemcf_demodulate(demodOOK, synchronizedInput[i], &demodOutputDataDigital[i]);
     }
     updateDemodulatorLock(demodOOK, 0.005f);
     

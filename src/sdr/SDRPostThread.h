@@ -5,6 +5,7 @@
 
 #include "SoapySDRThread.h"
 #include <algorithm>
+#include <cstdint>
 
 enum SDRPostThreadChannelizerType {
     SDRPostPFBCH = 1,
@@ -54,6 +55,7 @@ private:
 
     ReBuffer<DemodulatorThreadIQData> buffers;
     std::vector<liquid_float_complex> dataOut;
+    std::vector<liquid_float_complex> channelizerInput;
     std::vector<long long> chanCenters;
     long long chanBw = 0;
     
@@ -71,4 +73,12 @@ private:
     firpfbch2_crcf channelizer2;
     iirfilt_crcf dcFilter;
     std::vector<liquid_float_complex> dcBuf;
+    bool inputDCCorrected = false;
+    bool pendingChannelizerDiscontinuity = true;
+    bool inputDiscontinuity = true;
+    bool inputHasTimestamp = false;
+    std::uint64_t inputSequence = 0;
+    long long inputTimeNs = 0;
+    bool haveInputSequence = false;
+    std::uint64_t lastInputSequence = 0;
 };

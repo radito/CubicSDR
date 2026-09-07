@@ -4,6 +4,7 @@
 #pragma once
 
 #include <memory>
+#include <cstdint>
 #include <queue>
 #include <vector>
 
@@ -44,7 +45,7 @@ class DemodulatorThread : public IOThread {
 
   bool getSquelchBreak();
 
-  int getEpochMs();
+  std::int64_t getEpochMs();
 
   static void releaseSquelchLock(DemodulatorInstance* inst);
 
@@ -62,7 +63,7 @@ class DemodulatorThread : public IOThread {
   std::atomic<float> signalLevel, signalFloor, signalCeil;
   std::atomic<bool> squelchEnabled, squelchBreak;
 
-  std::atomic<int> lastSquelchTime;
+  std::atomic<std::int64_t> lastSquelchTime;
 
   static DemodulatorInstance* squelchLock;
   static std::mutex squelchLockMutex;
@@ -74,6 +75,7 @@ class DemodulatorThread : public IOThread {
   AudioThreadInputQueuePtr audioOutputQueue;
   DemodulatorThreadOutputQueuePtr audioVisOutputQueue;
   DemodulatorThreadOutputQueuePtr audioSinkOutputQueue = nullptr;
+  bool pendingAudioDiscontinuity = true;
 
   //protects the audioVisOutputQueue dynamic binding change at runtime (in DemodulatorMgr)
   SpinMutex m_mutexAudioVisOutputQueue;

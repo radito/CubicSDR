@@ -25,10 +25,10 @@ ModemBase *ModemFMStereo::factory() {
 }
 
 int ModemFMStereo::checkSampleRate(long long sampleRate, int /* audioSampleRate */) {
-    if (sampleRate < 100000) {
-        return 100000;
-    } else if (sampleRate < 1500) {
-        return 1500;
+    // The stereo difference channel reaches roughly 53 kHz; leave transition
+    // room above Nyquist rather than accepting an aliasing 100 ksample/s rate.
+    if (sampleRate < 120000) {
+        return 120000;
     } else {
         return (int)sampleRate;
     }
@@ -137,7 +137,7 @@ ModemKit *ModemFMStereo::buildKit(long long sampleRate, int audioSampleRate) {
     
     kit->stereoPilot = nco_crcf_create(LIQUID_VCO);
     nco_crcf_reset(kit->stereoPilot);
-    nco_crcf_pll_set_bandwidth(kit->stereoPilot, 0.25f);
+    nco_crcf_pll_set_bandwidth(kit->stereoPilot, 0.01f);
     
     kit->demph = _demph;
     
@@ -184,6 +184,20 @@ void ModemFMStereo::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInp
 
     if (bufSize == 0) {
         return;
+    }
+
+    if (input->discontinuity) {
+        freqdem_reset(demodFM);
+        msresamp_rrrf_reset(fmkit->audioResampler);
+        msresamp_rrrf_reset(fmkit->stereoResampler);
+        firfilt_rrrf_reset(fmkit->firStereoLeft);
+        firfilt_rrrf_reset(fmkit->firStereoRight);
+        firhilbf_reset(fmkit->firStereoR2C);
+        firhilbf_reset(fmkit->firStereoC2R);
+        iirfilt_crcf_reset(fmkit->iirStereoPilot);
+        nco_crcf_reset(fmkit->stereoPilot);
+        if (fmkit->iirDemphL) iirfilt_rrrf_reset(fmkit->iirDemphL);
+        if (fmkit->iirDemphR) iirfilt_rrrf_reset(fmkit->iirDemphR);
     }
     
     double audio_resample_ratio = fmkit->audioResampleRatio;

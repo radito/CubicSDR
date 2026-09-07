@@ -49,6 +49,13 @@ void ModemLSB::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput *a
        
         return;
     }
+
+
+    if (input->discontinuity) {
+        iirfilt_crcf_reset(ssbFilt);
+        nco_crcf_set_phase(ssbShift, 0.0f);
+        firhilbf_reset(c2rFilt);
+    }
     
     liquid_float_complex x, y;
     for (size_t i = 0; i < bufSize; i++) { // Reject upper band

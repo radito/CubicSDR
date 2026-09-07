@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 #include "SpectrumVisualProcessor.h"
-#include "CubicSDR.h"
 
 #include <algorithm>
+#include <limits>
 
 //50 ms
 #define HEARTBEAT_CHECK_PERIOD_MICROS (50 * 1000) 
@@ -180,6 +180,23 @@ void SpectrumVisualProcessor::setup(unsigned int fftSize_in) {
     memset(fftOutput,0,memSize);
 
     fftPlan = fft_create_plan(fftSizeInternal, fftInput, fftOutput, LIQUID_FFT_FORWARD, 0);
+
+    fftWindow.resize(fftSizeInternal);
+    double windowEnergy = 0.0;
+    for (size_t i = 0; i < fftSizeInternal; ++i) {
+        const float value = fftSizeInternal > 1
+            ? 0.5f - 0.5f * std::cos(6.28318530717958647692 * static_cast<double>(i) /
+                                     static_cast<double>(fftSizeInternal - 1))
+            : 1.0f;
+        fftWindow[i] = value;
+        windowEnergy += static_cast<double>(value) * value;
+    }
+    fftPowerScale = windowEnergy > 0.0
+        ? 1.0 / (static_cast<double>(fftSizeInternal) * windowEnergy)
+        : 1.0;
+    fft_ceil_ma = fft_ceil_maa = std::numeric_limits<double>::quiet_NaN();
+    fft_floor_ma = fft_floor_maa = std::numeric_limits<double>::quiet_NaN();
+    peakReset = 2;
 }
 
 void SpectrumVisualProcessor::setFFTSize(unsigned int fftSize_in) {
@@ -248,6 +265,15 @@ void SpectrumVisualProcessor::process() {
 
     //then get the busy_lock for the rest of the processing.
     std::lock_guard < std::mutex > busy_lock(busy_run);    
+
+    if (iqData->discontinuity) {
+        // A rolling FFT or streaming resampler must never join samples from
+        // opposite sides of a device/queue gap into one displayed frame.
+        fftFrames.reset(fftSizeInternal);
+        if (resampler) msresamp_crcf_reset(resampler);
+        // Preserve the selected frequency offset across a stream gap.
+        nco_crcf_set_phase(freqShifter, 0.0f);
+    }
    
     bool doPeak = peakHold && (peakReset == 0);
     
@@ -308,7 +334,9 @@ void SpectrumVisualProcessor::process() {
             
             if (centerFreq != iqData->frequency) {
                 if ((centerFreq - iqData->frequency) != shiftFrequency || lastInputBandwidth != iqData->sampleRate) {
-                    if (abs(iqData->frequency - centerFreq) < (wxGetApp().getSampleRate() / 2)) {
+                    // The demod thumbnail may receive channelized IQ; its
+                    // valid tuning range is defined by that input's rate.
+                    if (abs(iqData->frequency - centerFreq) < (iqData->sampleRate / 2)) {
                         long lastShiftFrequency = shiftFrequency;
                         shiftFrequency = centerFreq - iqData->frequency;
                         nco_crcf_set_frequency(freqShifter, (2.0 * M_PI) * (((double) abs(shiftFrequency)) / ((double) iqData->sampleRate)));
@@ -420,18 +448,24 @@ void SpectrumVisualProcessor::process() {
                 output->spectrum_hold_points.resize(0);
             }
             
-            float fft_ceil = 0, fft_floor = 1;
+            for (size_t i = 0; i < fftSizeInternal; ++i) {
+                fftInput[i].real *= fftWindow[i];
+                fftInput[i].imag *= fftWindow[i];
+            }
+
+            double fft_ceil = 0.0;
+            double fft_floor = std::numeric_limits<double>::max();
 
             fft_execute(fftPlan);
             
             for (int i = 0, iMax = fftSizeInternal / 2; i < iMax; i++) {
                 float a = fftOutput[i].real;
                 float b = fftOutput[i].imag;
-                float c = sqrt(a * a + b * b);
+                double c = (static_cast<double>(a) * a + static_cast<double>(b) * b) * fftPowerScale;
                 
                 float x = fftOutput[fftSizeInternal / 2 + i].real;
                 float y = fftOutput[fftSizeInternal / 2 + i].imag;
-                float z = sqrt(x * x + y * y);
+                double z = (static_cast<double>(x) * x + static_cast<double>(y) * y) * fftPowerScale;
                 
                 fft_result[i] = (z);
                 fft_result[fftSizeInternal / 2 + i] = (c);
@@ -522,8 +556,11 @@ void SpectrumVisualProcessor::process() {
             double visualAccum = 0;
             double peak_acc = 0, acc = 0, accCount = 0, i = 0;
    
-            double point_ceil = doPeak?fft_ceil_peak:fft_ceil_maa;
-            double point_floor = doPeak?fft_floor_peak:fft_floor_maa;
+            const double point_ceil = doPeak ? fft_ceil_peak : fft_ceil_maa;
+            const double point_floor = doPeak ? fft_floor_peak : fft_floor_maa;
+            const double pointCeilDb = 10.0 * std::log10(std::max(point_ceil, 1.0e-20));
+            const double pointFloorDb = 10.0 * std::log10(std::max(point_floor, 1.0e-20));
+            const double displayRangeDb = std::max(pointCeilDb - pointFloorDb, 10.0);
             
             for (int x = 0, xMax = output->spectrum_points.size() / 2; x < xMax; x++) {
                 visualAccum += visualRatio * double(SPECTRUM_VZM);
@@ -551,10 +588,14 @@ void SpectrumVisualProcessor::process() {
                     output->spectrum_hold_points[x * 2] = ((float) x / (float) xMax);
                 }
                 if (accCount) {
-                    output->spectrum_points[x * 2 + 1] = ((log10((acc/accCount)+0.25 - (point_floor-0.75)) / log10((point_ceil+0.25) - (point_floor-0.75))))*sf;
+                    const double binDb = 10.0 * std::log10(std::max(acc / accCount, 1.0e-20));
+                    output->spectrum_points[x * 2 + 1] = static_cast<float>(
+                        std::clamp((binDb - pointFloorDb) / displayRangeDb, 0.0, 1.0) * sf);
                     acc = 0.0;
                     if (doPeak) {
-                        output->spectrum_hold_points[x * 2 + 1] = ((log10((peak_acc/accCount)+0.25 - (point_floor-0.75)) / log10((point_ceil+0.25) - (point_floor-0.75))))*sf;
+                        const double peakDb = 10.0 * std::log10(std::max(peak_acc / accCount, 1.0e-20));
+                        output->spectrum_hold_points[x * 2 + 1] = static_cast<float>(
+                            std::clamp((peakDb - pointFloorDb) / displayRangeDb, 0.0, 1.0) * sf);
                         peak_acc = 0.0;
                     }
                     accCount = 0.0;
@@ -568,7 +609,7 @@ void SpectrumVisualProcessor::process() {
                 
                 if (freqMin < iqData->frequency && freqMax > iqData->frequency) {
                     int freqRange = int(freqMax-freqMin);
-                    int freqStep = freqRange/fftSize;
+                    int freqStep = std::max(1, freqRange / static_cast<int>(fftSize));
                     int fftStart = (zeroPt/freqStep)-(2000/freqStep);
                     int fftEnd = (zeroPt/freqStep)+(2000/freqStep);
                     
@@ -609,8 +650,8 @@ void SpectrumVisualProcessor::process() {
                 }
             }
             
-            output->fft_ceiling = point_ceil/sf;
-            output->fft_floor = point_floor;
+            output->fft_ceiling = pointCeilDb;
+            output->fft_floor = pointFloorDb;
 
             output->centerFreq = centerFreq;
             output->bandwidth = bandwidth;

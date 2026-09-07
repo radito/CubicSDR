@@ -352,7 +352,7 @@ bool CubicSDR::OnInit() {
 
   // I/Q Data
   pipeSDRIQData = std::make_shared<SDRThreadIQDataQueue>();
-  pipeSDRIQData->set_max_num_items(100);
+  pipeSDRIQData->set_max_num_items(8);
 
   sdrThread = new SDRThread();
   sdrThread->setOutputQueue("IQDataOutput", pipeSDRIQData);

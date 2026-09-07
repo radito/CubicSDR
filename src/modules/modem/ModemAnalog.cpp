@@ -3,6 +3,9 @@
 
 #include "ModemAnalog.h"
 
+#include <algorithm>
+#include <cmath>
+
 ModemAnalog::ModemAnalog() : Modem(), aOutputCeil(1), aOutputCeilMA(1), aOutputCeilMAA(1) {
     
 }
@@ -41,6 +44,11 @@ void ModemAnalog::disposeKit(ModemKit *kit) {
 
 void ModemAnalog::initOutputBuffers(ModemKitAnalog *akit, ModemIQData *input) {
     bufSize = input->data.size();
+
+    if (input->discontinuity) {
+        msresamp_rrrf_reset(akit->audioResampler);
+        aOutputCeil = aOutputCeilMA = aOutputCeilMAA = 1.0f;
+    }
     
     if (!bufSize) {
         return;
@@ -73,15 +81,16 @@ void ModemAnalog::buildAudioOutput(ModemKitAnalog *akit, AudioThreadInput *audio
         aOutputCeil = 0;
         
         for (size_t i = 0; i < bufSize; i++) {
-            if (demodOutputData[i] > aOutputCeil) {
-                aOutputCeil = demodOutputData[i];
+            const float magnitude = std::fabs(demodOutputData[i]);
+            if (magnitude > aOutputCeil) {
+                aOutputCeil = magnitude;
             }
         }
         
-        float gain = 0.5f / aOutputCeilMAA;
+        float gain = 0.5f / std::max(aOutputCeilMAA, 1.0e-6f);
         
         for (size_t i = 0; i < bufSize; i++) {
-            demodOutputData[i] *= gain;
+            demodOutputData[i] = std::clamp(demodOutputData[i] * gain, -1.0f, 1.0f);
         }
     }
     

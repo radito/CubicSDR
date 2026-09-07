@@ -58,6 +58,7 @@ CUBIC_TEST(audio_thread_input_copy_preserves_playback_metadata_and_samples) {
     source.type = 4;
     source.is_squelch_active = true;
     source.is_denoised = true;
+    source.discontinuity = true;
     source.data = {0.1f, -0.2f, 0.3f, -0.4f};
 
     AudioThreadInput copy(&source);
@@ -69,6 +70,7 @@ CUBIC_TEST(audio_thread_input_copy_preserves_playback_metadata_and_samples) {
     CUBIC_REQUIRE(copy.type == source.type);
     CUBIC_REQUIRE(copy.is_squelch_active);
     CUBIC_REQUIRE(copy.is_denoised);
+    CUBIC_REQUIRE(copy.discontinuity);
     CUBIC_REQUIRE(copy.data == source.data);
 
     source.data[0] = 1.0f;
@@ -79,6 +81,10 @@ CUBIC_TEST(demodulator_iq_assignment_deep_copies_samples_and_metadata) {
     DemodulatorThreadIQData source;
     source.frequency = 144390000;
     source.sampleRate = 24000;
+    source.discontinuity = false;
+    source.hasTimestamp = true;
+    source.sequence = 42;
+    source.timeNs = 123456789;
     source.data.resize(2);
     source.data[0].real = 1.0f;
     source.data[1].imag = -1.0f;
@@ -87,6 +93,10 @@ CUBIC_TEST(demodulator_iq_assignment_deep_copies_samples_and_metadata) {
     copy = source;
     CUBIC_REQUIRE(copy.frequency == source.frequency);
     CUBIC_REQUIRE(copy.sampleRate == source.sampleRate);
+    CUBIC_REQUIRE(!copy.discontinuity);
+    CUBIC_REQUIRE(copy.hasTimestamp);
+    CUBIC_REQUIRE(copy.sequence == 42);
+    CUBIC_REQUIRE(copy.timeNs == 123456789);
     CUBIC_REQUIRE(copy.data.size() == 2);
     CUBIC_REQUIRE(copy.data[0].real == 1.0f);
     CUBIC_REQUIRE(copy.data[1].imag == -1.0f);

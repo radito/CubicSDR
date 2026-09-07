@@ -49,14 +49,21 @@ bool DemodulatorPreThread::isInitialized() {
     return initialized.load();
 }
 
-DemodulatorPreThread::~DemodulatorPreThread() = default;
+DemodulatorPreThread::~DemodulatorPreThread() {
+    if (iqResampler) {
+        msresamp_crcf_destroy(iqResampler);
+    }
+    if (freqShifter) {
+        nco_crcf_destroy(freqShifter);
+    }
+
+}
 
 void DemodulatorPreThread::run() {
 #ifdef __APPLE__
-    pthread_t tID = pthread_self();  // ID of this thread
-    int priority = sched_get_priority_max( SCHED_FIFO) - 1;
-    sched_param prio = {priority}; // scheduling priority of thread
-    pthread_setschedparam(tID, SCHED_FIFO, &prio);
+    if (__builtin_available(macOS 10.10, *)) {
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    }
 #endif
 
 //    std::cout << "Demodulator preprocessor thread started.." << std::endl;
@@ -77,6 +84,13 @@ void DemodulatorPreThread::run() {
         if (!iqInputQueue->pop(inp, HEARTBEAT_CHECK_PERIOD_MICROS)) {
             continue;
         }
+
+        // This IQ block is shared with other demodulators and the visual
+        // processor. A gap in this consumer's queue must stay local.
+        const bool inputDiscontinuity = inp->discontinuity ||
+            (haveInputSequence && inp->sequence != lastInputSequence + 1);
+        lastInputSequence = inp->sequence;
+        haveInputSequence = true;
         
         if (frequencyChanged.load()) {
             currentFrequency.store(newFrequency);
@@ -166,6 +180,11 @@ void DemodulatorPreThread::run() {
 //        std::lock_guard < std::mutex > lock(inp->m_mutex);
         std::vector<liquid_float_complex> *data = &inp->data;
         if (!data->empty() && (inp->sampleRate == currentSampleRate) && cModem && cModemKit) {
+            if (inputDiscontinuity) {
+                msresamp_crcf_reset(iqResampler);
+                // nco_reset also clears frequency, losing the tuned station.
+                nco_crcf_set_phase(freqShifter, 0.0f);
+            }
             size_t bufSize = data->size();
 
             if (in_buf_data.size() != bufSize) {
@@ -215,6 +234,10 @@ void DemodulatorPreThread::run() {
             resamp->modem = cModem;
             resamp->modemKit = cModemKit;
             resamp->sampleRate = currentBandwidth;
+            resamp->discontinuity = inputDiscontinuity;
+            resamp->hasTimestamp = inp->hasTimestamp;
+            resamp->sequence = inp->sequence;
+            resamp->timeNs = inp->timeNs;
 
             //VSO: blocking push
             iqOutputQueue->push(resamp);   
