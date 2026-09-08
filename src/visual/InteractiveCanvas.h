@@ -7,6 +7,7 @@
 #include "wx/timer.h"
 
 #include "MouseTracker.h"
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,8 @@ public:
     bool isShiftDown() const;
 
 protected:
+    bool refreshReady();
+
     void OnKeyDown(wxKeyEvent& event);
     void OnKeyUp(wxKeyEvent& event);
 
@@ -64,5 +67,5 @@ protected:
     long long lastBandwidth;
 
     bool isView;
+    std::chrono::steady_clock::time_point lastRefresh;
 };
-

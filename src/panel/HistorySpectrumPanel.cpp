@@ -14,6 +14,11 @@ HistorySpectrumPanel::HistorySpectrumPanel() {
                  ThemeMgr::mgr.currentTheme->fftBackground);
 }
 
+void HistorySpectrumPanel::setLinesPerSecond(int linesPerSecond) {
+    const int safeRate = linesPerSecond > 0 ? linesPerSecond : 1;
+    appendInterval = std::chrono::microseconds(1000000 / safeRate);
+}
+
 void HistorySpectrumPanel::clear() {
     history.clear();
     lastAppend = {};
@@ -24,7 +29,7 @@ bool HistorySpectrumPanel::beginAppend(float floorDb, float ceilDb, int streamRa
     if (!std::isfinite(floorDb) || !std::isfinite(ceilDb)) return false;
     const auto now = std::chrono::steady_clock::now();
     if (lastAppend.time_since_epoch().count() &&
-        now - lastAppend < std::chrono::milliseconds(HISTORY_INTERVAL_MS)) return false;
+        now - lastAppend < appendInterval) return false;
     if (lastSampleRate && lastSampleRate != streamRate) clear();
     lastSampleRate = streamRate;
     lastAppend = now;

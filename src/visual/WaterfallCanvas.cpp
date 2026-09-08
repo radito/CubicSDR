@@ -84,6 +84,9 @@ WaterfallCanvas::DragState WaterfallCanvas::getNextDragState() {
 
 void WaterfallCanvas::attachSpectrumCanvas(SpectrumCanvas *canvas_in) {
     spectrumCanvas = canvas_in;
+    if (spectrumCanvas) {
+        spectrumCanvas->setHistoryLinesPerSecond(linesPerSecond);
+    }
 }
 
 void WaterfallCanvas::processInputQueue() {
@@ -482,9 +485,15 @@ void WaterfallCanvas::OnKeyDown(wxKeyEvent& event) {
     }
 
 }
-void WaterfallCanvas::OnIdle(wxIdleEvent & event) {
-    processInputQueue();
-    Refresh();
+void WaterfallCanvas::OnIdle(wxIdleEvent &WXUNUSED(event)) {
+    if (!IsShownOnScreen() || !refreshReady()) return;
+
+    const bool interactive = mouseTracker.mouseInView() || mouseZoom != 1.0f ||
+        scaleMove != 0.0f || freqMove != 0.0;
+    if (!visualDataQueue->empty() || interactive) {
+        processInputQueue();
+        Refresh(false);
+    }
 }
 
 void WaterfallCanvas::updateHoverState() {
@@ -914,6 +923,9 @@ void WaterfallCanvas::setLinesPerSecond(int lps) {
     std::lock_guard < std::mutex > lock(tex_update);
     
     linesPerSecond = lps;
+    if (spectrumCanvas) {
+        spectrumCanvas->setHistoryLinesPerSecond(lps);
+    }
 
     //empty all
     visualDataQueue->flush();

@@ -15,6 +15,7 @@ public:
                      int sampleRate);
     void addSpectrumPoints(const std::vector<float>& points, float floorDb,
                            float ceilDb, int streamRate);
+    void setLinesPerSecond(int linesPerSecond);
     void setYAxisUp(bool enabled) { yAxisUp = enabled; geometryDirty = true; }
     void setHistoryShift(float shiftX) { historyShiftX = shiftX; geometryDirty = true; }
     void clear();
@@ -27,7 +28,6 @@ protected:
 private:
     static constexpr size_t HISTORY_BINS = 256;
     static constexpr size_t HISTORY_ROWS = 96;
-    static constexpr int HISTORY_INTERVAL_MS = 40;
 
     std::deque<std::vector<float>> history;
     float floorValue = -100.0f;
@@ -36,6 +36,7 @@ private:
     bool yAxisUp = false;
     float historyShiftX = 0.0f;
     std::chrono::steady_clock::time_point lastAppend{};
+    std::chrono::microseconds appendInterval{40000};
 
     struct RenderVertex {
         GLfloat x, y;

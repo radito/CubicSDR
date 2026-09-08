@@ -145,9 +145,14 @@ void SpectrumCanvas::OnPaint(wxPaintEvent& WXUNUSED(event)) {
 }
 
 
-void SpectrumCanvas::OnIdle(wxIdleEvent &event) {
-    Refresh();
-    event.RequestMore();
+void SpectrumCanvas::OnIdle(wxIdleEvent &WXUNUSED(event)) {
+    if (!IsShownOnScreen()) return;
+
+    const bool interactive = resetScaleFactor || mouseTracker.mouseInView() ||
+        (waterfallCanvas && waterfallCanvas->getMouseTracker()->mouseInView());
+    if ((!visualDataQueue->empty() || interactive) && refreshReady()) {
+        Refresh(false);
+    }
 }
 
 
@@ -235,6 +240,10 @@ void SpectrumCanvas::setHistoryEnabled(bool enabled) {
     historyPanel.clear();
     historyCenterFreq = 0;
     historyBandwidth = 0;
+}
+
+void SpectrumCanvas::setHistoryLinesPerSecond(int linesPerSecond) {
+    historyPanel.setLinesPerSecond(linesPerSecond);
 }
 
 bool SpectrumCanvas::getHistoryEnabled() const {

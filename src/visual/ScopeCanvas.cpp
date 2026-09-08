@@ -231,9 +231,14 @@ void ScopeCanvas::OnPaint(wxPaintEvent& WXUNUSED(event)) {
 }
 
 
-void ScopeCanvas::OnIdle(wxIdleEvent &event) {
-    Refresh();
-    event.RequestMore();
+void ScopeCanvas::OnIdle(wxIdleEvent &WXUNUSED(event)) {
+    if (!IsShownOnScreen()) return;
+
+    const bool interactive = mouseTracker.mouseDown() || dragAccel != 0.0f ||
+        ctr != ctrTarget;
+    if ((!inputData->empty() || interactive) && refreshReady()) {
+        Refresh(false);
+    }
 }
 
 ScopeRenderDataQueuePtr ScopeCanvas::getInputQueue() {

@@ -46,6 +46,7 @@ public:
     void setScaleFactorEnabled(bool en);
     void setFFTSize(int fftSize);
     void setHistoryEnabled(bool enabled);
+    void setHistoryLinesPerSecond(int linesPerSecond);
     bool getHistoryEnabled() const;
     
     SpectrumVisualDataQueuePtr getVisualDataQueue();

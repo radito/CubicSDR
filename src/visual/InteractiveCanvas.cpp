@@ -26,6 +26,24 @@ InteractiveCanvas::InteractiveCanvas(wxWindow *parent, const wxGLAttributes& dis
 
 InteractiveCanvas::~InteractiveCanvas() = default;
 
+bool InteractiveCanvas::refreshReady() {
+    int fps = 30;
+    const auto mode = wxGetApp().getConfig()->getPerfMode();
+    if (mode == AppConfig::PERF_HIGH) {
+        fps = 60;
+    } else if (mode == AppConfig::PERF_LOW) {
+        fps = 15;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const auto interval = std::chrono::milliseconds(1000 / fps);
+    if (lastRefresh.time_since_epoch().count() && now - lastRefresh < interval) {
+        return false;
+    }
+    lastRefresh = now;
+    return true;
+}
+
 void InteractiveCanvas::setView(long long center_freq_in, long long bandwidth_in) {
     isView = true;
     centerFreq = center_freq_in;
