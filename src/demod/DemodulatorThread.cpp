@@ -120,6 +120,7 @@ void DemodulatorThread::run() {
     if (inp->modem && inp->modem != cModem) {
       delete cModem;
       cModem = inp->modem;
+      demodInstance->setModemStatus("");
     }
 
     if (!cModem || !cModemKit) {
@@ -153,6 +154,10 @@ void DemodulatorThread::run() {
     }
 
     cModem->demodulate(cModemKit, &modemData, ati.get());
+    std::string modemStatus;
+    if (cModem->takeStatus(modemStatus)) {
+      demodInstance->setModemStatus(modemStatus);
+    }
 
     double power = 0.0;
     for (const auto &sample : inp->data) {

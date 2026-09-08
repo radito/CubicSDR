@@ -7,6 +7,7 @@
 #include <map>
 #include <thread>
 #include <memory>
+#include <mutex>
 #include "DemodDefs.h"
 #include "ModemDigital.h"
 #include "ModemAnalog.h"
@@ -56,6 +57,8 @@ public:
     void terminate();
     std::string getLabel();
     void setLabel(std::string labelStr);
+    std::string getModemStatus();
+    void setModemStatus(const std::string& status);
 
     bool isTerminated();
     void updateLabel(long long freq);
@@ -157,6 +160,8 @@ private:
     std::recursive_mutex m_thread_control_mutex;
 
     std::atomic<std::string *> label; //
+    std::mutex modemStatusMutex;
+    std::string modemStatus;
     // User editable buffer, 16 bit string.
     std::atomic<std::wstring *> user_label; 
 

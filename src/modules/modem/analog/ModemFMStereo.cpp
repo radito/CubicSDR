@@ -3,6 +3,11 @@
 
 #include "ModemFMStereo.h"
 
+namespace {
+constexpr float RDS_SAMPLE_RATE = 19000.0f;
+constexpr float RDS_CUTOFF = 3000.0f;
+}
+
 ModemFMStereo::ModemFMStereo() {
     demodFM = freqdem_create(0.5);
     _demph = 75;
@@ -97,6 +102,8 @@ ModemKit *ModemFMStereo::buildKit(long long sampleRate, int audioSampleRate) {
     
     kit->audioResampler = msresamp_rrrf_create((float)kit->audioResampleRatio, As);
     kit->stereoResampler = msresamp_rrrf_create((float)kit->audioResampleRatio, As);
+    kit->rdsResampler = msresamp_crcf_create(RDS_SAMPLE_RATE / float(sampleRate), As);
+    kit->rdsLowpass = iirfilt_crcf_create_lowpass(6, RDS_CUTOFF / RDS_SAMPLE_RATE);
     
     // Stereo filters / shifters
     float firStereoCutoff = 16000.0f / float(audioSampleRate);
@@ -165,6 +172,8 @@ void ModemFMStereo::disposeKit(ModemKit *kit) {
     
     msresamp_rrrf_destroy(fmkit->audioResampler);
     msresamp_rrrf_destroy(fmkit->stereoResampler);
+    msresamp_crcf_destroy(fmkit->rdsResampler);
+    iirfilt_crcf_destroy(fmkit->rdsLowpass);
     firfilt_rrrf_destroy(fmkit->firStereoLeft);
     firfilt_rrrf_destroy(fmkit->firStereoRight);
     firhilbf_destroy(fmkit->firStereoR2C);
@@ -190,6 +199,8 @@ void ModemFMStereo::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInp
         freqdem_reset(demodFM);
         msresamp_rrrf_reset(fmkit->audioResampler);
         msresamp_rrrf_reset(fmkit->stereoResampler);
+        msresamp_crcf_reset(fmkit->rdsResampler);
+        iirfilt_crcf_reset(fmkit->rdsLowpass);
         firfilt_rrrf_reset(fmkit->firStereoLeft);
         firfilt_rrrf_reset(fmkit->firStereoRight);
         firhilbf_reset(fmkit->firStereoR2C);
@@ -198,6 +209,7 @@ void ModemFMStereo::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInp
         nco_crcf_reset(fmkit->stereoPilot);
         if (fmkit->iirDemphL) iirfilt_rrrf_reset(fmkit->iirDemphL);
         if (fmkit->iirDemphR) iirfilt_rrrf_reset(fmkit->iirDemphR);
+        rdsDecoder.reset();
     }
     
     double audio_resample_ratio = fmkit->audioResampleRatio;
@@ -230,6 +242,7 @@ void ModemFMStereo::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInp
         }
         demodStereoData.resize(bufSize);
     }
+    rdsMixedData.resize(bufSize);
     
     float phase_error = 0;
     
@@ -257,11 +270,26 @@ void ModemFMStereo::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInp
         // 38khz down-mix
         nco_crcf_mix_down(fmkit->stereoPilot, x, &y);
         nco_crcf_mix_down(fmkit->stereoPilot, y, &x);
+        nco_crcf_mix_down(fmkit->stereoPilot, x, &rdsMixedData[i]);
         
         // complex -> real
         float usb_discard;
         firhilbf_c2r_execute(fmkit->firStereoC2R, x, &demodStereoData[i], &usb_discard);
     }
+
+    const size_t rdsOutputSize = static_cast<size_t>(
+        ceil(double(bufSize) * RDS_SAMPLE_RATE / double(fmkit->sampleRate))) + 512;
+    rdsResampledData.resize(rdsOutputSize);
+    unsigned int numRdsWritten = 0;
+    msresamp_crcf_execute(fmkit->rdsResampler, rdsMixedData.data(),
+                          static_cast<unsigned int>(bufSize), rdsResampledData.data(),
+                          &numRdsWritten);
+    for (unsigned int i = 0; i < numRdsWritten; ++i) {
+        liquid_float_complex filtered;
+        iirfilt_crcf_execute(fmkit->rdsLowpass, rdsResampledData[i], &filtered);
+        rdsResampledData[i] = filtered;
+    }
+    rdsDecoder.process(rdsResampledData.data(), numRdsWritten);
     
     //            std::cout << "[PLL] phase error: " << phase_error;
     //            std::cout << " freq:" << (((nco_crcf_get_frequency(stereoPilot) / (2.0 * M_PI)) * inp->sampleRate)) << std::endl;
@@ -305,4 +333,8 @@ void ModemFMStereo::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInp
         audioOut->data[i * 2] = l;
         audioOut->data[i * 2 + 1] = r;
     }
+}
+
+bool ModemFMStereo::takeStatus(std::string& status) {
+    return rdsDecoder.takeUpdate(status);
 }

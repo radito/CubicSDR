@@ -152,6 +152,7 @@ public:
     virtual void disposeKit(ModemKit *kit) = 0;
     
     virtual void demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput *audioOut) = 0;
+    virtual bool takeStatus(std::string& status);
     
     bool shouldRebuildKit();
     void rebuildKit();

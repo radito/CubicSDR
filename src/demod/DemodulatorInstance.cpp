@@ -199,6 +199,16 @@ void DemodulatorInstance::setLabel(std::string labelStr) {
     delete label.exchange(new std::string(labelStr));
 }
 
+std::string DemodulatorInstance::getModemStatus() {
+    std::lock_guard<std::mutex> lock(modemStatusMutex);
+    return modemStatus;
+}
+
+void DemodulatorInstance::setModemStatus(const std::string& status) {
+    std::lock_guard<std::mutex> lock(modemStatusMutex);
+    modemStatus = status;
+}
+
 bool DemodulatorInstance::isTerminated() {
 
     std::lock_guard < std::recursive_mutex > lockData(m_thread_control_mutex);
@@ -354,6 +364,7 @@ int DemodulatorInstance::getOutputDevice() {
 }
 
 void DemodulatorInstance::setDemodulatorType(const std::string& demod_type_in) {
+    setModemStatus("");
     setGain(getGain());
     if (demodulatorPreThread) {
         std::string currentDemodType = demodulatorPreThread->getDemodType();
@@ -432,7 +443,10 @@ void DemodulatorInstance::setFrequency(long long freq) {
     if ((freq - getBandwidth() / 2) <= 0) {
         freq = getBandwidth() / 2;
     }
-    
+
+    if (freq != getFrequency()) {
+        setModemStatus("");
+    }
     demodulatorPreThread->setFrequency(freq);
 #if ENABLE_DIGITAL_LAB
     if (activeOutput) {

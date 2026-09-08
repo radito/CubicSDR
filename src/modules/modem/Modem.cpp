@@ -35,6 +35,10 @@ Modem::Modem() : refreshKit(false), _useSignalOutput(false) {}
 
 Modem::~Modem() = default;
 
+bool Modem::takeStatus(std::string& /* status */) {
+    return false;
+}
+
 void Modem::addModemFactory(ModemFactoryFn factoryFunc, std::string modemName, int defaultRate) {
     modemFactories[modemName] = factoryFunc;
     modemDefaultRates[modemName] = defaultRate;

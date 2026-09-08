@@ -187,6 +187,10 @@ void PrimaryGLContext::DrawDemodInfo(const DemodulatorInstancePtr& demod, const 
     }    
     // Append the default label
     demodLabel.append(demod->getLabel());
+    const std::string modemStatus = demod->getModemStatus();
+    if (!modemStatus.empty()) {
+        demodLabel.append(" ").append(modemStatus);
+    }
 
     if (demod->getDemodulatorType() == "USB") {
         GLFont::getFont(16, GLFont::getScaleFactor()).drawString(demodLabel, uxPos, hPos, GLFont::GLFONT_ALIGN_LEFT, GLFont::GLFONT_ALIGN_CENTER, 0, 0, true);

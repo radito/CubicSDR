@@ -3,15 +3,18 @@
 
 #pragma once
 #include "Modem.h"
+#include "dsp/RDSDecoder.h"
 
 class ModemKitFMStereo: public ModemKit {
 public:
-    ModemKitFMStereo() : audioResampler(nullptr), stereoResampler(nullptr), audioResampleRatio(0), firStereoLeft(nullptr), firStereoRight(nullptr), iirStereoPilot(nullptr), 
+    ModemKitFMStereo() : audioResampler(nullptr), stereoResampler(nullptr), rdsResampler(nullptr), rdsLowpass(nullptr), audioResampleRatio(0), firStereoLeft(nullptr), firStereoRight(nullptr), iirStereoPilot(nullptr),
         demph(0), iirDemphR(nullptr), iirDemphL(nullptr), firStereoR2C(nullptr), firStereoC2R(nullptr), stereoPilot(nullptr) {
     }
     
     msresamp_rrrf audioResampler;
     msresamp_rrrf stereoResampler;
+    msresamp_crcf rdsResampler;
+    iirfilt_crcf rdsLowpass;
     double audioResampleRatio;
     
     firfilt_rrrf firStereoLeft;
@@ -50,13 +53,17 @@ public:
     void disposeKit(ModemKit *kit) override;
     
     void demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput *audioOut) override;
+    bool takeStatus(std::string& status) override;
     
 private:
     std::vector<float> demodOutputData;
     std::vector<float> demodStereoData;
     std::vector<float> resampledOutputData;
     std::vector<float> resampledStereoData;
+    std::vector<liquid_float_complex> rdsMixedData;
+    std::vector<liquid_float_complex> rdsResampledData;
     freqdem demodFM;
+    RDSDecoder rdsDecoder;
     
     int _demph;
 };

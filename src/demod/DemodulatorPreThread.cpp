@@ -87,14 +87,16 @@ void DemodulatorPreThread::run() {
 
         // This IQ block is shared with other demodulators and the visual
         // processor. A gap in this consumer's queue must stay local.
-        const bool inputDiscontinuity = inp->discontinuity ||
+        bool inputDiscontinuity = inp->discontinuity ||
             (haveInputSequence && inp->sequence != lastInputSequence + 1);
         lastInputSequence = inp->sequence;
         haveInputSequence = true;
         
-        if (frequencyChanged.load()) {
-            currentFrequency.store(newFrequency);
-            frequencyChanged.store(false);
+        if (frequencyChanged.exchange(false)) {
+            const long long requestedFrequency = newFrequency.load();
+            inputDiscontinuity = inputDiscontinuity ||
+                requestedFrequency != currentFrequency.load();
+            currentFrequency.store(requestedFrequency);
         }
         
         if (inp->sampleRate != currentSampleRate) {
