@@ -268,6 +268,7 @@ void DemodulatorThread::run() {
 
       ati_vis->sampleRate = inp->sampleRate;
       ati_vis->inputRate = inp->sampleRate;
+      ati_vis->discontinuity = inp->discontinuity;
 
       size_t num_vis = DEMOD_VIS_SIZE;
       if (modemDigital) {

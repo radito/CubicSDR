@@ -87,7 +87,7 @@ AppFrame::AppFrame() :
     // OpenGL settings:
     //deprecated format: std::vector<int> attribList = { WX_GL_RGBA, WX_GL_DOUBLEBUFFER, 0 };
     wxGLAttributes attribList;
-    attribList.PlatformDefaults().RGBA().MinRGBA(8, 8, 8, 8).DoubleBuffer().EndList();
+    attribList.PlatformDefaults().RGBA().MinRGBA(8, 8, 8, 8).DoubleBuffer().Depth(16).EndList();
 
     mainSplitter = new wxSplitterWindow( this, wxID_MAIN_SPLITTER, wxDefaultPosition, wxDefaultSize, wxSP_3DSASH | wxSP_LIVE_UPDATE );
     mainSplitter->SetSashGravity(10.0f / 37.0f);
@@ -248,6 +248,11 @@ AppFrame::AppFrame() :
     // Peak Hold
     peakHoldButton = makePeakHoldButton(spectrumPanel, attribList);
     spectrumCtlTray->Add(peakHoldButton, 1, wxEXPAND | wxALL, 0);
+    spectrumCtlTray->AddSpacer(1);
+
+    // 3D Spectrum History
+    spectrum3DButton = makeSpectrum3DButton(spectrumPanel, attribList);
+    spectrumCtlTray->Add(spectrum3DButton, 1, wxEXPAND | wxALL, 0);
     spectrumCtlTray->AddSpacer(1);
 
     // Spectrum Average Meter
@@ -710,6 +715,18 @@ ModeSelectorCanvas *AppFrame::makePeakHoldButton(wxWindow *parent, const wxGLAtt
     pCanvas->setPadding(-1, -1);
     pCanvas->setHighlightColor(RGBA4f(0.2f, 0.8f, 0.2f));
     pCanvas->setHelpTip("Peak Hold Toggle");
+    pCanvas->setToggleMode(true);
+    pCanvas->setSelection(-1);
+    pCanvas->SetMinSize(wxSize(12, 24));
+    return pCanvas;
+}
+
+ModeSelectorCanvas *AppFrame::makeSpectrum3DButton(wxWindow *parent, const wxGLAttributes &attribList) {
+    auto *pCanvas = new ModeSelectorCanvas(parent, attribList);
+    pCanvas->addChoice(1, "3D");
+    pCanvas->setPadding(-1, -1);
+    pCanvas->setHighlightColor(RGBA4f(0.2f, 0.65f, 1.0f));
+    pCanvas->setHelpTip("3D Spectrum History Toggle");
     pCanvas->setToggleMode(true);
     pCanvas->setSelection(-1);
     pCanvas->SetMinSize(wxSize(12, 24));
@@ -2218,6 +2235,7 @@ void AppFrame::OnIdle(wxIdleEvent &event) {
     handleScopeSpectrumProcessors();
     handleModemProperties();
     handlePeakHold();
+    handleSpectrum3D();
 
 #if USE_HAMLIB
     handleRigMenu();
@@ -2277,6 +2295,12 @@ void AppFrame::handlePeakHold() {
         }
         peakHoldButton->clearModeChanged();
     }
+}
+
+void AppFrame::handleSpectrum3D() {
+    if (!spectrum3DButton->modeChanged()) return;
+    spectrumCanvas->setHistoryEnabled(spectrum3DButton->getSelection() == 1);
+    spectrum3DButton->clearModeChanged();
 }
 
 void AppFrame::handleModemProperties() {
@@ -2368,9 +2392,10 @@ void AppFrame::handleScopeProcessor() {
         scopeCanvas->setPPMMode(demodTuner->isAltDown());
 
         wxGetApp().getScopeProcessor()->setScopeEnabled(scopeCanvas->scopeVisible());
-        wxGetApp().getScopeProcessor()->setSpectrumEnabled(scopeCanvas->spectrumVisible());
+        const bool spectrumNeeded = scopeCanvas->spectrumVisible() || scopeCanvas->historyVisible();
+        wxGetApp().getScopeProcessor()->setSpectrumEnabled(spectrumNeeded);
         wxGetApp().getAudioVisualQueue()->set_max_num_items(
-                (scopeCanvas->scopeVisible() ? 1 : 0) + (scopeCanvas->spectrumVisible() ? 1 : 0));
+                (scopeCanvas->scopeVisible() ? 1 : 0) + (spectrumNeeded ? 1 : 0));
 
         wxGetApp().getScopeProcessor()->run();
     }

@@ -90,6 +90,7 @@ void ScopeVisualProcessor::process() {
             renderData->channels = audioInputData->channels;
             renderData->inputRate = audioInputData->inputRate;
             renderData->sampleRate = audioInputData->sampleRate;
+            renderData->discontinuity = audioInputData->discontinuity;
 
             if (renderData->waveform_points.size() != iMax * 2) {
                 renderData->waveform_points.resize(iMax * 2);
@@ -167,6 +168,7 @@ void ScopeVisualProcessor::process() {
             renderData->channels = audioInputData->channels;
             renderData->inputRate = audioInputData->inputRate;
             renderData->sampleRate = audioInputData->sampleRate;
+            renderData->discontinuity = audioInputData->discontinuity;
             
             audioInputData = nullptr; //->decRefCount();
 
@@ -225,12 +227,14 @@ void ScopeVisualProcessor::process() {
             if (renderData->waveform_points.size() != outSize*2) {
                 renderData->waveform_points.resize(outSize*2);
             }
+            renderData->spectrum_db.resize(outSize);
             
             const double floorDb = 10.0 * std::log10(std::max(fft_floor_maa, 1.0e-20));
             const double ceilDb = 10.0 * std::log10(std::max(fft_ceil_maa, 1.0e-20));
             const double rangeDb = std::max(ceilDb - floorDb, 10.0);
             for (i = 0; i < outSize; i++) {
                 const double binDb = 10.0 * std::log10(std::max(fft_result_maa[i], 1.0e-20));
+                renderData->spectrum_db[i] = static_cast<float>(binDb);
                 float v = static_cast<float>(std::clamp((binDb - floorDb) / rangeDb, 0.0, 1.0));
                 renderData->waveform_points[i * 2] = ((double) i / (double) (outSize));
                 renderData->waveform_points[i * 2 + 1] = v;

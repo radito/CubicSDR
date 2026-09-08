@@ -40,6 +40,7 @@ ScopeCanvas::ScopeCanvas(wxWindow *parent, const wxGLAttributes& dispAttrs) : In
     
     parentPanel.addChild(&scopePanel);
     parentPanel.addChild(&spectrumPanel);
+    parentPanel.addChild(&historyPanel);
     parentPanel.setFill(GLPanel::GLPANEL_FILL_NONE);
     scopePanel.setSize(1.0,-1.0);
     spectrumPanel.setSize(1.0,-1.0);
@@ -52,27 +53,17 @@ ScopeCanvas::ScopeCanvas(wxWindow *parent, const wxGLAttributes& dispAttrs) : In
 ScopeCanvas::~ScopeCanvas() = default;
 
 bool ScopeCanvas::scopeVisible() {
-    float panelInterval = (2.0 + panelSpacing);
-    
-    ctrTarget = abs(round(ctr / panelInterval));
-
-    if (ctrTarget == 0 || dragAccel || (ctr != ctrTarget)) {
-        return true;
-    }
-    
-    return false;
+    return std::fabs(ctr) < 2.2f;
 }
 
 bool ScopeCanvas::spectrumVisible() {
     float panelInterval = (2.0 + panelSpacing);
-    
-    ctrTarget = abs(round(ctr / panelInterval));
- 
-    if (ctrTarget == 1 || dragAccel || (ctr != ctrTarget)) {
-        return true;
-    }
-    
-    return false;
+    return std::fabs(panelInterval + ctr) < 2.2f;
+}
+
+bool ScopeCanvas::historyVisible() {
+    float panelInterval = (2.0 + panelSpacing);
+    return std::fabs(panelInterval * 2.0f + ctr) < 2.2f;
 }
 
 void ScopeCanvas::setDeviceName(std::string device_name) {
@@ -100,6 +91,11 @@ void ScopeCanvas::OnPaint(wxPaintEvent& WXUNUSED(event)) {
   //  wxPaintDC dc(this);
     const wxSize ClientSize = GetClientSize() * GetContentScaleFactor();
     
+    const bool showSpectrum = spectrumVisible();
+    const bool showHistory = historyVisible();
+    if (showHistory && !historyWasVisible) historyPanel.clear();
+    historyWasVisible = showHistory;
+
     ScopeRenderDataPtr avData;
     while (inputData->try_pop(avData)) {
        
@@ -112,13 +108,20 @@ void ScopeCanvas::OnPaint(wxPaintEvent& WXUNUSED(event)) {
 
         } else {
             if (!avData->waveform_points.empty()) {
-                spectrumPanel.setPoints(avData->waveform_points);
-                spectrumPanel.setFloorValue(avData->fft_floor);
-                spectrumPanel.setCeilValue(avData->fft_ceil);
-                spectrumPanel.setBandwidth((avData->sampleRate/2)*1000);
-                spectrumPanel.setFreq((avData->sampleRate/4)*1000);
-                spectrumPanel.setFFTSize(avData->fft_size);
-                spectrumPanel.setShowDb(showDb);
+                if (showSpectrum) {
+                    spectrumPanel.setPoints(avData->waveform_points);
+                    spectrumPanel.setFloorValue(avData->fft_floor);
+                    spectrumPanel.setCeilValue(avData->fft_ceil);
+                    spectrumPanel.setBandwidth((avData->sampleRate/2)*1000);
+                    spectrumPanel.setFreq((avData->sampleRate/4)*1000);
+                    spectrumPanel.setFFTSize(avData->fft_size);
+                    spectrumPanel.setShowDb(showDb);
+                }
+                if (showHistory) {
+                    if (avData->discontinuity) historyPanel.clear();
+                    historyPanel.addSpectrum(avData->spectrum_db, avData->fft_floor,
+                                             avData->fft_ceil, avData->sampleRate);
+                }
             }
          
         }
@@ -155,8 +158,8 @@ void ScopeCanvas::OnPaint(wxPaintEvent& WXUNUSED(event)) {
 
     if (!mouseTracker.mouseDown()) {
         ctrTarget = round(ctr / panelInterval);
-        if (ctrTarget < -1.0) {
-            ctrTarget = -1.0;
+        if (ctrTarget < -2.0) {
+            ctrTarget = -2.0;
         } else if (ctrTarget > 0.0) {
             ctrTarget = 0.0;
         }
@@ -181,23 +184,24 @@ void ScopeCanvas::OnPaint(wxPaintEvent& WXUNUSED(event)) {
     float roty = 0;
     
     scopePanel.setPosition(ctr, 0);
-    if (scopeVisible()) {
-        scopePanel.contentsVisible = true;
+    const bool showScope = scopeVisible();
+    scopePanel.visible = scopePanel.contentsVisible = showScope;
+    if (showScope) {
         roty = atan2(scopePanel.pos[0],1.2);
         scopePanel.rot[1] = -(roty * (180.0 / M_PI));
-    } else {
-        scopePanel.contentsVisible = false;
     }
     
     spectrumPanel.setPosition(panelInterval+ctr, 0);
-    if (spectrumVisible()) {
+    const bool drawSpectrum = spectrumVisible();
+    spectrumPanel.visible = spectrumPanel.contentsVisible = drawSpectrum;
+    if (drawSpectrum) {
         spectrumPanel.setFillColor(ThemeMgr::mgr.currentTheme->scopeBackground * 2.0, RGBA4f(0,0,0,1));
-        spectrumPanel.contentsVisible = true;
         roty = atan2(spectrumPanel.pos[0],1.2);
         spectrumPanel.rot[1] = -(roty * (180.0 / M_PI));
-    } else {
-        spectrumPanel.contentsVisible = false;
     }
+
+    historyPanel.setPosition(panelInterval * 2.0f + ctr, 0);
+    historyPanel.visible = historyPanel.contentsVisible = historyVisible();
 
     parentPanel.calcTransform(modelView);
     parentPanel.draw();
@@ -289,4 +293,3 @@ void ScopeCanvas::OnKeyDown(wxKeyEvent& event) {
 void ScopeCanvas::OnKeyUp(wxKeyEvent& event) {
     InteractiveCanvas::OnKeyUp(event);
 }
-

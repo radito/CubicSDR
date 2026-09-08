@@ -14,6 +14,7 @@
 #include "ScopeVisualProcessor.h"
 #include "ScopePanel.h"
 #include "SpectrumPanel.h"
+#include "HistorySpectrumPanel.h"
 #include "InteractiveCanvas.h"
 
 class ScopeCanvas: public InteractiveCanvas {
@@ -40,6 +41,7 @@ public:
 
     bool scopeVisible();
     bool spectrumVisible();
+    bool historyVisible();
     
     void setHelpTip(std::string tip);
 
@@ -59,11 +61,13 @@ private:
     ScopePanel scopePanel;
     GLPanel parentPanel;
     SpectrumPanel spectrumPanel;
+    HistorySpectrumPanel historyPanel;
     GLPanel bgPanel;
     ScopeContext *glContext;
     std::string deviceName;
     bool ppmMode;
     bool showDb;
+    bool historyWasVisible = false;
     float panelSpacing;
     float ctr;
     float ctrTarget;
@@ -72,4 +76,3 @@ private:
 // event table
 wxDECLARE_EVENT_TABLE();
 };
-

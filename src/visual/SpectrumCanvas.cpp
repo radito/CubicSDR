@@ -43,6 +43,8 @@ SpectrumCanvas::SpectrumCanvas(wxWindow *parent, const wxGLAttributes& dispAttrs
     resetScaleFactor = false;
     scaleFactorEnabled = false;
     bwChange = 0.0;
+    historyPanel.setYAxisUp(true);
+    historyPanel.setHistoryShift(-0.28f);
 }
 
 SpectrumCanvas::~SpectrumCanvas() = default;
@@ -59,6 +61,18 @@ void SpectrumCanvas::OnPaint(wxPaintEvent& WXUNUSED(event)) {
             spectrumPanel.setPeakPoints(vData->spectrum_hold_points);
             spectrumPanel.setFloorValue(vData->fft_floor);
             spectrumPanel.setCeilValue(vData->fft_ceiling);
+            if (historyEnabled) {
+                if (historyCenterFreq != vData->centerFreq ||
+                    historyBandwidth != vData->bandwidth) {
+                    historyPanel.clear();
+                    historyCenterFreq = vData->centerFreq;
+                    historyBandwidth = vData->bandwidth;
+                }
+                historyPanel.addSpectrumPoints(vData->spectrum_points,
+                                               vData->fft_floor,
+                                               vData->fft_ceiling,
+                                               vData->bandwidth);
+            }
         }
     }
     
@@ -82,6 +96,10 @@ void SpectrumCanvas::OnPaint(wxPaintEvent& WXUNUSED(event)) {
     spectrumPanel.setFreq(getCenterFrequency());
     spectrumPanel.setBandwidth(getBandwidth());
     
+    if (historyEnabled) {
+        historyPanel.calcTransform(CubicVR::mat4::identity());
+        historyPanel.draw();
+    }
     spectrumPanel.calcTransform(CubicVR::mat4::identity());
     spectrumPanel.draw();
     
@@ -200,6 +218,24 @@ void SpectrumCanvas::setScaleFactorEnabled(bool en) {
 
 void SpectrumCanvas::setFFTSize(int fftSize) {
     spectrumPanel.setFFTSize(fftSize);
+}
+
+void SpectrumCanvas::setHistoryEnabled(bool enabled) {
+    if (historyEnabled == enabled) return;
+    historyEnabled = enabled;
+    spectrumPanel.setFill(enabled ? GLPanel::GLPANEL_FILL_NONE
+                                  : GLPanel::GLPANEL_FILL_GRAD_Y);
+    if (!enabled) {
+        spectrumPanel.setFillColor(ThemeMgr::mgr.currentTheme->fftBackground * 2.0,
+                                   ThemeMgr::mgr.currentTheme->fftBackground);
+    }
+    historyPanel.clear();
+    historyCenterFreq = 0;
+    historyBandwidth = 0;
+}
+
+bool SpectrumCanvas::getHistoryEnabled() const {
+    return historyEnabled;
 }
 
 void SpectrumCanvas::updateScaleFactor(float factor) {

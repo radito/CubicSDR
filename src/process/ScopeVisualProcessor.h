@@ -11,6 +11,7 @@
 class ScopeRenderData {
 public:
 	std::vector<float> waveform_points;
+    std::vector<float> spectrum_db;
     ScopePanel::ScopeMode mode = ScopePanel::SCOPE_MODE_Y;
     int inputRate;
     int sampleRate;
@@ -18,6 +19,7 @@ public:
     bool spectrum;
     int fft_size;
     double fft_floor, fft_ceil;
+    bool discontinuity = false;
 
     virtual ~ScopeRenderData() = default;
 };

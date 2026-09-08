@@ -12,6 +12,7 @@
 #include "MouseTracker.h"
 #include "SpectrumVisualProcessor.h"
 #include "SpectrumPanel.h"
+#include "HistorySpectrumPanel.h"
 
 class WaterfallCanvas;
 
@@ -44,6 +45,8 @@ public:
 
     void setScaleFactorEnabled(bool en);
     void setFFTSize(int fftSize);
+    void setHistoryEnabled(bool enabled);
+    bool getHistoryEnabled() const;
     
     SpectrumVisualDataQueuePtr getVisualDataQueue();
     
@@ -69,13 +72,16 @@ private:
     PrimaryGLContext *glContext;
     WaterfallCanvas *waterfallCanvas;
     SpectrumPanel spectrumPanel;
+    HistorySpectrumPanel historyPanel;
     float scaleFactor;
     int bwChange;
     bool resetScaleFactor, scaleFactorEnabled;
+    bool historyEnabled = false;
+    long long historyCenterFreq = 0;
+    int historyBandwidth = 0;
     
     SpectrumVisualDataQueuePtr  visualDataQueue = std::make_shared<SpectrumVisualDataQueue>();
 
 // event table
 wxDECLARE_EVENT_TABLE();
 };
-

@@ -372,6 +372,7 @@ SET (cubicsdr_sources
     src/util/DataTree.cpp
     src/panel/ScopePanel.cpp
     src/panel/SpectrumPanel.cpp
+    src/panel/HistorySpectrumPanel.cpp
     src/panel/WaterfallPanel.cpp
     src/panel/MeterPanel.cpp
     src/panel/MeterPanel.h
