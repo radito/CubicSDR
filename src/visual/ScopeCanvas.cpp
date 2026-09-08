@@ -50,7 +50,10 @@ ScopeCanvas::ScopeCanvas(wxWindow *parent, const wxGLAttributes& dispAttrs) : In
     spectrumPanel.setUseDBOffset(false);
 }
 
-ScopeCanvas::~ScopeCanvas() = default;
+ScopeCanvas::~ScopeCanvas() {
+    glContext->SetCurrent(*this);
+    historyPanel.releaseGL();
+}
 
 bool ScopeCanvas::scopeVisible() {
     return std::fabs(ctr) < 2.2f;

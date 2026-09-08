@@ -47,7 +47,10 @@ SpectrumCanvas::SpectrumCanvas(wxWindow *parent, const wxGLAttributes& dispAttrs
     historyPanel.setHistoryShift(-0.28f);
 }
 
-SpectrumCanvas::~SpectrumCanvas() = default;
+SpectrumCanvas::~SpectrumCanvas() {
+    glContext->SetCurrent(*this);
+    historyPanel.releaseGL();
+}
 
 void SpectrumCanvas::OnPaint(wxPaintEvent& WXUNUSED(event)) {
   //  wxPaintDC dc(this);
