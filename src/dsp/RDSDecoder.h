@@ -16,6 +16,7 @@ public:
 
     RDSDecoder();
     void reset();
+    void resetSignal();
     void process(const liquid_float_complex *samples, size_t count);
     bool takeUpdate(std::string& status);
 

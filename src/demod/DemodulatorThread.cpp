@@ -133,6 +133,7 @@ void DemodulatorThread::run() {
 
     modemData.sampleRate = inp->sampleRate;
     modemData.discontinuity = inp->discontinuity;
+    modemData.retuned = inp->retuned;
     modemData.data.assign(inputData->begin(), inputData->end());
 
     AudioThreadInputPtr ati = nullptr;

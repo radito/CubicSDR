@@ -6,6 +6,14 @@
 namespace {
 constexpr float RDS_SAMPLE_RATE = 19000.0f;
 constexpr float RDS_CUTOFF = 3000.0f;
+constexpr float STEREO_PILOT_HZ = 19000.0f;
+constexpr float PILOT_MAX_DEVIATION_HZ = 1000.0f;
+
+void resetStereoPilot(nco_crcf pilot, long long sampleRate) {
+    nco_crcf_reset(pilot);
+    nco_crcf_set_frequency(
+        pilot, 2.0f * float(M_PI) * STEREO_PILOT_HZ / float(sampleRate));
+}
 }
 
 ModemFMStereo::ModemFMStereo() {
@@ -133,8 +141,8 @@ ModemKit *ModemFMStereo::buildKit(long long sampleRate, int audioSampleRate) {
         bw = 100000.0;
     }
     unsigned int order =   5;       // filter order
-    float        f0    =   ((float) 19000 / bw);
-    float        fc    =   ((float) 19500 / bw);
+    float        f0    = STEREO_PILOT_HZ / bw;
+    float        fc    = 19500.0f / bw;
     float        Ap    =   1.0f;
     
     kit->iirStereoPilot = iirfilt_crcf_create_prototype(LIQUID_IIRDES_CHEBY2, LIQUID_IIRDES_BANDPASS, LIQUID_IIRDES_SOS, order, fc, f0, Ap, As);
@@ -143,7 +151,7 @@ ModemKit *ModemFMStereo::buildKit(long long sampleRate, int audioSampleRate) {
     kit->firStereoC2R = firhilbf_create(5, 60.0f);
     
     kit->stereoPilot = nco_crcf_create(LIQUID_VCO);
-    nco_crcf_reset(kit->stereoPilot);
+    resetStereoPilot(kit->stereoPilot, sampleRate);
     nco_crcf_pll_set_bandwidth(kit->stereoPilot, 0.01f);
     
     kit->demph = _demph;
@@ -206,10 +214,14 @@ void ModemFMStereo::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInp
         firhilbf_reset(fmkit->firStereoR2C);
         firhilbf_reset(fmkit->firStereoC2R);
         iirfilt_crcf_reset(fmkit->iirStereoPilot);
-        nco_crcf_reset(fmkit->stereoPilot);
+        resetStereoPilot(fmkit->stereoPilot, fmkit->sampleRate);
         if (fmkit->iirDemphL) iirfilt_rrrf_reset(fmkit->iirDemphL);
         if (fmkit->iirDemphR) iirfilt_rrrf_reset(fmkit->iirDemphR);
-        rdsDecoder.reset();
+        if (input->retuned) {
+            rdsDecoder.reset();
+        } else {
+            rdsDecoder.resetSignal();
+        }
     }
     
     double audio_resample_ratio = fmkit->audioResampleRatio;
@@ -275,6 +287,16 @@ void ModemFMStereo::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInp
         // complex -> real
         float usb_discard;
         firhilbf_c2r_execute(fmkit->firStereoC2R, x, &demodStereoData[i], &usb_discard);
+    }
+
+    const float nominalPilot = 2.0f * float(M_PI) * STEREO_PILOT_HZ /
+                               float(fmkit->sampleRate);
+    const float maxPilotError = 2.0f * float(M_PI) * PILOT_MAX_DEVIATION_HZ /
+                                float(fmkit->sampleRate);
+    const float pilotFrequency = nco_crcf_get_frequency(fmkit->stereoPilot);
+    if (pilotFrequency < nominalPilot - maxPilotError ||
+        pilotFrequency > nominalPilot + maxPilotError) {
+        nco_crcf_set_frequency(fmkit->stereoPilot, nominalPilot);
     }
 
     const size_t rdsOutputSize = static_cast<size_t>(

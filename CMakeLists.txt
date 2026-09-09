@@ -924,12 +924,27 @@ IF (APPLE AND BUNDLE_APP)
            " COMPONENT Runtime)
    ENDIF(CUBICSDR_CODE_SIGN)
 
-   # Copy the already-fixed and signed bundle byte-for-byte. install(TARGETS)
-   # performs additional install_name_tool edits in the CPack staging area,
-   # invalidating the signature created above.
-   INSTALL(DIRECTORY "${APPS}"
-       DESTINATION . USE_SOURCE_PERMISSIONS COMPONENT Runtime
-   )
+   # Preserve framework symlinks when staging the signed bundle. CMake's
+   # install(DIRECTORY) can flatten them into duplicate dylibs, causing macOS
+   # to load wxWidgets Objective-C classes twice and crash at startup.
+   INSTALL(CODE "
+       set(INSTALLED_APP \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/CubicSDR.app\")
+       file(REMOVE_RECURSE \"\${INSTALLED_APP}\")
+       file(MAKE_DIRECTORY \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}\")
+       file(COPY \"${APPS}\"
+            DESTINATION \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}\"
+            USE_SOURCE_PERMISSIONS)
+       file(GLOB_RECURSE SOURCE_ENTRIES LIST_DIRECTORIES true \"${APPS}/*\")
+       foreach(SOURCE_ENTRY IN LISTS SOURCE_ENTRIES)
+           if(IS_SYMLINK \"\${SOURCE_ENTRY}\")
+               file(RELATIVE_PATH RELATIVE_ENTRY \"${APPS}\" \"\${SOURCE_ENTRY}\")
+               file(READ_SYMLINK \"\${SOURCE_ENTRY}\" LINK_TARGET)
+               file(REMOVE \"\${INSTALLED_APP}/\${RELATIVE_ENTRY}\")
+               file(CREATE_LINK \"\${LINK_TARGET}\"
+                    \"\${INSTALLED_APP}/\${RELATIVE_ENTRY}\" SYMBOLIC)
+           endif()
+       endforeach()
+       " COMPONENT Runtime)
 
    include(CPack)
 ENDIF()

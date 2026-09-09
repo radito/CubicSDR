@@ -69,6 +69,7 @@ void DemodulatorPreThread::run() {
 //    std::cout << "Demodulator preprocessor thread started.." << std::endl;
 
     ReBuffer<DemodulatorThreadPostIQData> buffers("DemodulatorPreThreadBuffers");
+    bool pendingRetune = false;
 
     iqInputQueue = std::static_pointer_cast<DemodulatorThreadInputQueue>(getInputQueue("IQDataInput"));
     iqOutputQueue = std::static_pointer_cast<DemodulatorThreadPostInputQueue>(getOutputQueue("IQDataOutput"));
@@ -94,10 +95,11 @@ void DemodulatorPreThread::run() {
         
         if (frequencyChanged.exchange(false)) {
             const long long requestedFrequency = newFrequency.load();
-            inputDiscontinuity = inputDiscontinuity ||
+            pendingRetune = pendingRetune ||
                 requestedFrequency != currentFrequency.load();
             currentFrequency.store(requestedFrequency);
         }
+        inputDiscontinuity = inputDiscontinuity || pendingRetune;
         
         if (inp->sampleRate != currentSampleRate) {
             newSampleRate = inp->sampleRate;
@@ -237,12 +239,14 @@ void DemodulatorPreThread::run() {
             resamp->modemKit = cModemKit;
             resamp->sampleRate = currentBandwidth;
             resamp->discontinuity = inputDiscontinuity;
+            resamp->retuned = pendingRetune;
             resamp->hasTimestamp = inp->hasTimestamp;
             resamp->sequence = inp->sequence;
             resamp->timeNs = inp->timeNs;
 
             //VSO: blocking push
             iqOutputQueue->push(resamp);   
+            pendingRetune = false;
         }
 
         DemodulatorWorkerThreadResult result;

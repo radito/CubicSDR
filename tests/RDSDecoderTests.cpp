@@ -72,6 +72,9 @@ CUBIC_TEST(rds_decoder_extracts_pi_and_program_service) {
     CUBIC_REQUIRE(status == "RDS SYNC A123 TEST FM | Pop Music | TP:on TA:on");
     CUBIC_REQUIRE(!decoder.takeUpdate(status));
 
+    decoder.resetSignal();
+    CUBIC_REQUIRE(!decoder.takeUpdate(status));
+
     decoder.reset();
     CUBIC_REQUIRE(decoder.takeUpdate(status));
     CUBIC_REQUIRE(status == "RDS -");
@@ -111,20 +114,23 @@ CUBIC_TEST(rds_decoder_recovers_streamed_biphase_samples) {
     CUBIC_REQUIRE(status == "RDS SYNC BEEF RADIO123 | Pop Music | TP:on TA:on");
 
     std::vector<liquid_float_complex> silence(
-        3 * 19000 + RDSDecoder::SAMPLES_PER_BIT + 1);
+        6 * 19000 + RDSDecoder::SAMPLES_PER_BIT + 1);
     decoder.process(silence.data(), silence.size());
     CUBIC_REQUIRE(decoder.takeUpdate(status));
     CUBIC_REQUIRE(status == "RDS -");
 }
 
-CUBIC_TEST(rds_decoder_rejects_a_corrupt_group) {
+CUBIC_TEST(rds_decoder_corrects_a_single_corrupt_bit) {
     RDSDecoder decoder;
     std::string status;
     CUBIC_REQUIRE(decoder.takeUpdate(status));
-    feedBlock(decoder, makeBlock(0x1234, 0x0FC));
-    feedBlock(decoder, makeBlock(0x0000, 0x198) ^ (1u << 12));
-    feedBlock(decoder, makeBlock(0x0000, 0x168));
-    feedBlock(decoder, makeBlock(0x4142, 0x1B4));
+    for (int group = 0; group < 2; ++group) {
+        feedBlock(decoder, makeBlock(0x1234, 0x0FC));
+        feedBlock(decoder, makeBlock(0x0000, 0x198) ^ (1u << 12));
+        feedBlock(decoder, makeBlock(0x0000, 0x168));
+        feedBlock(decoder, makeBlock(0x4142, 0x1B4));
+    }
 
-    CUBIC_REQUIRE(!decoder.takeUpdate(status));
+    CUBIC_REQUIRE(decoder.takeUpdate(status));
+    CUBIC_REQUIRE(status == "RDS SYNC 1234 | None | TP:off TA:off");
 }

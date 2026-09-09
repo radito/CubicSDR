@@ -8,7 +8,7 @@
 #include <cstdio>
 
 namespace {
-constexpr uint64_t RDS_SEARCH_TIMEOUT_SAMPLES = 3 * 19000;
+constexpr uint64_t RDS_SEARCH_TIMEOUT_SAMPLES = 6 * 19000;
 constexpr const char *PTY_NAMES[32] = {
     "None", "News", "Current Affairs", "Information", "Sport", "Education",
     "Drama", "Culture", "Science", "Varied", "Pop Music", "Rock Music",
@@ -24,9 +24,7 @@ RDSDecoder::RDSDecoder() {
 }
 
 void RDSDecoder::reset() {
-    phases = {};
-    directBlocks = {};
-    sampleIndex = 0;
+    resetSignal();
     programId = 0;
     programService.fill(' ');
     serviceSegments = 0;
@@ -34,9 +32,15 @@ void RDSDecoder::reset() {
     trafficProgram = false;
     trafficAnnouncement = false;
     synchronized = false;
-    lastValidGroupSample = 0;
     statusText = "RDS -";
     updatePending = true;
+}
+
+void RDSDecoder::resetSignal() {
+    phases = {};
+    directBlocks = {};
+    sampleIndex = 0;
+    lastValidGroupSample = 0;
 }
 
 void RDSDecoder::process(const liquid_float_complex *samples, size_t count) {
@@ -120,9 +124,25 @@ void RDSDecoder::processRecoveredBit(BlockState& state, bool bit) {
 
     if (--state.countdown > 0) return;
     const int blockIndex = state.expectedBlock;
-    const bool valid = blockIndex == 2
-        ? (currentSyndrome == expectedSyndromes[2] || currentSyndrome == 0x350)
-        : currentSyndrome == expectedSyndromes[blockIndex];
+    const auto matchesExpected = [&](uint16_t value) {
+        return blockIndex == 2
+            ? (value == expectedSyndromes[2] || value == 0x350)
+            : value == expectedSyndromes[blockIndex];
+    };
+    uint32_t decodedBlock = state.shift;
+    bool valid = matchesExpected(currentSyndrome);
+    if (!valid) {
+        // RDS checkwords can safely recover a single damaged bit. This avoids
+        // dropping an entire group for a short noise impulse.
+        for (int bitIndex = 0; bitIndex < 26; ++bitIndex) {
+            const uint32_t candidate = state.shift ^ (1u << bitIndex);
+            if (matchesExpected(syndrome(candidate))) {
+                decodedBlock = candidate;
+                valid = true;
+                break;
+            }
+        }
+    }
 
     if (!valid) {
         state.expectedBlock = -1;
@@ -135,7 +155,7 @@ void RDSDecoder::processRecoveredBit(BlockState& state, bool bit) {
         return;
     }
 
-    state.words[blockIndex] = static_cast<uint16_t>(state.shift >> 10);
+    state.words[blockIndex] = static_cast<uint16_t>(decodedBlock >> 10);
     if (blockIndex == 3) {
         state.validGroups = std::min(state.validGroups + 1, 1000);
         acceptGroup(state);

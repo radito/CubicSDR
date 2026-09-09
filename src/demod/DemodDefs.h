@@ -55,6 +55,7 @@ public:
 
     long long sampleRate;
     bool discontinuity;
+    bool retuned;
     bool hasTimestamp;
     std::uint64_t sequence;
     long long timeNs;
@@ -64,7 +65,7 @@ public:
     ModemKit *modemKit;
 
     DemodulatorThreadPostIQData() :
-            sampleRate(0), discontinuity(true), hasTimestamp(false), sequence(0), timeNs(0),
+            sampleRate(0), discontinuity(true), retuned(false), hasTimestamp(false), sequence(0), timeNs(0),
             modem(nullptr), modemKit(nullptr) {
 
     }

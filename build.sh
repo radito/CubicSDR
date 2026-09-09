@@ -158,7 +158,10 @@ module_destination="${app_path}/Contents/MacOS/modules"
 
 rm -rf -- "$app_path"
 cmake -E make_directory "$(dirname "$app_path")"
-cmake -E copy_directory "$raw_app_path" "$app_path"
+# copy_directory dereferences framework symlinks. That creates independent
+# copies of wxWidgets dylibs, so dyld loads every Objective-C class twice and
+# crashes at startup. Preserve bundle symlinks on macOS.
+/bin/cp -R -p -P "$raw_app_path" "$(dirname "$app_path")/"
 cmake -E make_directory "$module_destination"
 
 shopt -s nullglob

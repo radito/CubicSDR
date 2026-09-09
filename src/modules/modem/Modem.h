@@ -31,8 +31,9 @@ public:
     std::vector<liquid_float_complex> data;
     long long sampleRate;
     bool discontinuity;
+    bool retuned;
     
-    ModemIQData() : sampleRate(0), discontinuity(false) {
+    ModemIQData() : sampleRate(0), discontinuity(false), retuned(false) {
         
     }
     
