@@ -150,3 +150,40 @@ CUBIC_TEST(fft_distributor_frames_samples_and_preserves_metadata) {
     CUBIC_REQUIRE(first->data.front().real == 0.0f);
     CUBIC_REQUIRE(second->data.front().real == 4.0f);
 }
+
+CUBIC_TEST(fft_distributor_preserves_frames_across_ring_wrap) {
+    FFTDataDistributor distributor;
+    distributor.setFFTSize(4);
+    distributor.setLinesPerSecond(10);
+
+    auto input = std::make_shared<DemodulatorThreadInputQueue>();
+    auto output = std::make_shared<DemodulatorThreadInputQueue>();
+    output->set_max_num_items(4);
+    distributor.setInput(input);
+    distributor.attachOutput(output);
+
+    const auto pushSamples = [&](int first, int count) {
+        auto samples = std::make_shared<DemodulatorThreadIQData>();
+        samples->frequency = 99500000;
+        samples->sampleRate = 40;
+        samples->data.resize(count);
+        for (int i = 0; i < count; ++i) {
+            samples->data[i].real = static_cast<float>(first + i);
+        }
+        CUBIC_REQUIRE(input->try_push(samples));
+        distributor.run();
+    };
+
+    pushSamples(0, 6);
+    DemodulatorThreadIQDataPtr frame;
+    CUBIC_REQUIRE(output->try_pop(frame));
+    CUBIC_REQUIRE(frame->data.front().real == 0.0f);
+
+    pushSamples(6, 8);
+    CUBIC_REQUIRE(output->try_pop(frame));
+    CUBIC_REQUIRE(frame->data[0].real == 4.0f);
+    CUBIC_REQUIRE(frame->data[3].real == 7.0f);
+    CUBIC_REQUIRE(output->try_pop(frame));
+    CUBIC_REQUIRE(frame->data[0].real == 8.0f);
+    CUBIC_REQUIRE(frame->data[3].real == 11.0f);
+}

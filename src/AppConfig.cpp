@@ -343,6 +343,12 @@ AppConfig::AppConfig() {
 #endif
 }
 
+AppConfig::~AppConfig() {
+    for (auto& device : deviceConfig) {
+        delete device.second;
+    }
+}
+
 DeviceConfig *AppConfig::getDevice(const std::string& deviceId) {
 	if (deviceConfig.find(deviceId) == deviceConfig.end()) {
 		deviceConfig[deviceId] = new DeviceConfig();

@@ -42,6 +42,7 @@ public:
 
 #define REBUFFER_GC_LIMIT 100
 #define REBUFFER_WARNING_THRESHOLD 2000
+#define REBUFFER_IDLE_CACHE_LIMIT 8
 
 template<typename BufferType>
 class ReBuffer {
@@ -109,8 +110,22 @@ public:
             
            if (outputBuffers.back().age < -REBUFFER_GC_LIMIT) {
                 //by the nature of the shared_ptr, memory will ne deallocated automatically.           
-                outputBuffers.pop_back();
+               outputBuffers.pop_back();
                 //std::cout << "--" << std::flush;
+           }
+
+            // Keep a small warm cache, but release excess buffers retained
+            // after a queue backlog or sample-rate change.
+            size_t idleKept = 1;
+            for (auto idle = outputBuffers.begin(); idle != outputBuffers.end();) {
+                if (idle->ptr == buf || idle->ptr.use_count() != 1) {
+                    ++idle;
+                } else if (idleKept < REBUFFER_IDLE_CACHE_LIMIT) {
+                    ++idleKept;
+                    ++idle;
+                } else {
+                    idle = outputBuffers.erase(idle);
+                }
             }
             return buf;
         }

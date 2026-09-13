@@ -44,7 +44,10 @@ GainCanvas::GainCanvas(wxWindow *parent, const wxGLAttributes& dispAttrs) :
 	userGainAsChanged = false;
 }
 
-GainCanvas::~GainCanvas() = default;
+GainCanvas::~GainCanvas() {
+    delete glContext;
+    glContext = nullptr;
+}
 
 void GainCanvas::OnPaint(wxPaintEvent& WXUNUSED(event)) {
   //  wxPaintDC dc(this);

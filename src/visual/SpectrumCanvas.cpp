@@ -50,6 +50,8 @@ SpectrumCanvas::SpectrumCanvas(wxWindow *parent, const wxGLAttributes& dispAttrs
 SpectrumCanvas::~SpectrumCanvas() {
     glContext->SetCurrent(*this);
     historyPanel.releaseGL();
+    delete glContext;
+    glContext = nullptr;
 }
 
 void SpectrumCanvas::OnPaint(wxPaintEvent& WXUNUSED(event)) {

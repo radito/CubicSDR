@@ -87,7 +87,9 @@ AppFrame::AppFrame() :
     // OpenGL settings:
     //deprecated format: std::vector<int> attribList = { WX_GL_RGBA, WX_GL_DOUBLEBUFFER, 0 };
     wxGLAttributes attribList;
-    attribList.PlatformDefaults().RGBA().MinRGBA(8, 8, 8, 8).DoubleBuffer().Depth(16).EndList();
+    // Every view is rendered in painter order with depth testing disabled.
+    // Avoid allocating a Retina-sized depth surface for each GL canvas.
+    attribList.PlatformDefaults().RGBA().MinRGBA(8, 8, 8, 8).DoubleBuffer().EndList();
 
     mainSplitter = new wxSplitterWindow( this, wxID_MAIN_SPLITTER, wxDefaultPosition, wxDefaultSize, wxSP_3DSASH | wxSP_LIVE_UPDATE );
     mainSplitter->SetSashGravity(10.0f / 37.0f);

@@ -137,11 +137,11 @@ ModemKit *ModemFMStereo::buildKit(long long sampleRate, int audioSampleRate) {
     }
     
     unsigned int h_len = estimate_req_filter_len(ft, As);
-    float *h = new float[h_len];
-    liquid_firdes_kaiser(h_len, firStereoCutoff, As, mu, h);
+    std::vector<float> h(h_len);
+    liquid_firdes_kaiser(h_len, firStereoCutoff, As, mu, h.data());
     
-    kit->firStereoLeft = firfilt_rrrf_create(h, h_len);
-    kit->firStereoRight = firfilt_rrrf_create(h, h_len);
+    kit->firStereoLeft = firfilt_rrrf_create(h.data(), h_len);
+    kit->firStereoRight = firfilt_rrrf_create(h.data(), h_len);
     
     // stereo pilot filter
     float bw = float(sampleRate);

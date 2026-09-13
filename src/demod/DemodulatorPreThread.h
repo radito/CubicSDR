@@ -56,7 +56,6 @@ protected:
 
     msresamp_crcf iqResampler;
     double iqResampleRatio;
-    std::vector<liquid_float_complex> resampledData;
 
     Modem *cModem;
     ModemKit *cModemKit;

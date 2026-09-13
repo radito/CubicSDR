@@ -345,7 +345,9 @@ bool CubicSDR::OnInit() {
   pipeIQVisualData->set_max_num_items(1);
 
   pipeWaterfallIQVisualData = std::make_shared<DemodulatorThreadInputQueue>();
-  pipeWaterfallIQVisualData->set_max_num_items(128);
+  // Visual data may be dropped; a short queue avoids retaining seconds of
+  // stale, full-rate IQ buffers if rendering temporarily falls behind.
+  pipeWaterfallIQVisualData->set_max_num_items(8);
 
   getSpectrumProcessor()->setInput(pipeIQVisualData);
   getSpectrumProcessor()->setHideDC(true);

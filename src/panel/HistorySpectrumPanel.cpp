@@ -20,7 +20,8 @@ void HistorySpectrumPanel::setLinesPerSecond(int linesPerSecond) {
 }
 
 void HistorySpectrumPanel::clear() {
-    history.clear();
+    historyCount = 0;
+    historyHead = 0;
     lastAppend = {};
     geometryDirty = true;
 }
@@ -38,17 +39,25 @@ bool HistorySpectrumPanel::beginAppend(float floorDb, float ceilDb, int streamRa
     return true;
 }
 
-void HistorySpectrumPanel::appendRow(std::vector<float>&& row) {
-    history.push_back(std::move(row));
-    if (history.size() > HISTORY_ROWS) history.pop_front();
+void HistorySpectrumPanel::appendRow(HistoryRow&& row) {
+    history[historyHead] = std::move(row);
+    historyHead = (historyHead + 1) % HISTORY_ROWS;
+    historyCount = std::min(historyCount + 1, HISTORY_ROWS);
     geometryDirty = true;
+}
+
+const HistorySpectrumPanel::HistoryRow& HistorySpectrumPanel::historyRow(
+        size_t logicalIndex) const {
+    const size_t oldest = (historyHead + HISTORY_ROWS - historyCount) % HISTORY_ROWS;
+    return history[(oldest + logicalIndex) % HISTORY_ROWS];
 }
 
 void HistorySpectrumPanel::addSpectrum(const std::vector<float>& db,
                                        float floorDb, float ceilDb,
                                        int sampleRate) {
     if (db.empty() || !beginAppend(floorDb, ceilDb, sampleRate)) return;
-    std::vector<float> row(HISTORY_BINS, floorDb);
+    HistoryRow row;
+    row.fill(floorDb);
     for (size_t bin = 0; bin < HISTORY_BINS; ++bin) {
         const size_t first = bin * db.size() / HISTORY_BINS;
         const size_t last = std::max(first + 1, (bin + 1) * db.size() / HISTORY_BINS);
@@ -65,7 +74,8 @@ void HistorySpectrumPanel::addSpectrumPoints(const std::vector<float>& points,
     const size_t sourceBins = points.size() / 2;
     if (!sourceBins || !beginAppend(floorDb, ceilDb, streamRate)) return;
     const float range = std::max(ceilDb - floorDb, 10.0f);
-    std::vector<float> row(HISTORY_BINS, floorDb);
+    HistoryRow row;
+    row.fill(floorDb);
     for (size_t bin = 0; bin < HISTORY_BINS; ++bin) {
         const size_t first = bin * sourceBins / HISTORY_BINS;
         const size_t last = std::max(first + 1, (bin + 1) * sourceBins / HISTORY_BINS);
@@ -82,7 +92,7 @@ void HistorySpectrumPanel::rebuildGeometry() {
     surfaceVertices.clear();
     lineVertices.clear();
     gridVertexCount = 0;
-    if (history.size() < 2) return;
+    if (historyCount < 2) return;
 
     const float range = std::max(ceilValue - floorValue, 10.0f);
     auto& gradient = ThemeMgr::mgr.currentTheme->waterfallGradient;
@@ -92,7 +102,7 @@ void HistorySpectrumPanel::rebuildGeometry() {
     if (red.empty()) return;
 
     const auto rowAge = [&](size_t row) {
-        return static_cast<float>(history.size() - 1 - row) /
+        return static_cast<float>(historyCount - 1 - row) /
                static_cast<float>(HISTORY_ROWS - 1);
     };
     const auto projectedPoint = [&](size_t row, size_t bin, float value) {
@@ -113,7 +123,7 @@ void HistorySpectrumPanel::rebuildGeometry() {
         lineVertices.push_back({b.first, b.second, shade, shade, shade, alpha});
     };
     const auto makeVertex = [&](size_t row, size_t bin) {
-        const float value = std::clamp((history[row][bin] - floorValue) / range,
+        const float value = std::clamp((historyRow(row)[bin] - floorValue) / range,
                                        0.0f, 1.0f);
         const size_t color = std::min(red.size() - 1,
             static_cast<size_t>(value * static_cast<float>(red.size() - 1)));
@@ -126,17 +136,17 @@ void HistorySpectrumPanel::rebuildGeometry() {
 
     for (int line = 0; line <= 4; ++line) {
         const size_t bin = line * (HISTORY_BINS - 1) / 4;
-        addLine(projectedPoint(history.size() - 1, bin, 0.0f),
+        addLine(projectedPoint(historyCount - 1, bin, 0.0f),
                 projectedPoint(0, bin, 0.0f), 0.55f, 0.34f);
     }
-    for (size_t row = 0; row < history.size(); row += 12) {
+    for (size_t row = 0; row < historyCount; row += 12) {
         addLine(projectedPoint(row, 0, 0.0f),
                 projectedPoint(row, HISTORY_BINS - 1, 0.0f), 0.55f, 0.34f);
     }
     gridVertexCount = lineVertices.size();
 
-    surfaceVertices.reserve((history.size() - 1) * (HISTORY_BINS * 2 + 2));
-    for (size_t row = 1; row < history.size(); ++row) {
+    surfaceVertices.reserve((HISTORY_ROWS - 1) * (HISTORY_BINS * 2 + 2));
+    for (size_t row = 1; row < historyCount; ++row) {
         if (row > 1) {
             surfaceVertices.push_back(surfaceVertices.back());
             surfaceVertices.push_back(makeVertex(row - 1, 0));
@@ -147,12 +157,14 @@ void HistorySpectrumPanel::rebuildGeometry() {
         }
     }
 
-    for (size_t row = 0; row < history.size(); row += 4) {
+    lineVertices.reserve(5 * 2 + ((HISTORY_ROWS + 11) / 12) * 2 +
+                         ((HISTORY_ROWS + 3) / 4) * (HISTORY_BINS - 1) * 2);
+    for (size_t row = 0; row < historyCount; row += 4) {
         for (size_t bin = 1; bin < HISTORY_BINS; ++bin) {
             const float value0 = std::clamp(
-                (history[row][bin - 1] - floorValue) / range, 0.0f, 1.0f);
+                (historyRow(row)[bin - 1] - floorValue) / range, 0.0f, 1.0f);
             const float value1 = std::clamp(
-                (history[row][bin] - floorValue) / range, 0.0f, 1.0f);
+                (historyRow(row)[bin] - floorValue) / range, 0.0f, 1.0f);
             addLine(projectedPoint(row, bin - 1, value0),
                     projectedPoint(row, bin, value1), 0.03f, 0.28f);
         }
@@ -165,6 +177,8 @@ void HistorySpectrumPanel::releaseGL() {
     if (lineVbo) glDeleteBuffers(1, &lineVbo);
     surfaceVbo = 0;
     lineVbo = 0;
+    surfaceVboCapacity = 0;
+    lineVboCapacity = 0;
 #endif
 }
 
@@ -172,16 +186,22 @@ void HistorySpectrumPanel::drawPanelContents() {
     if (geometryDirty) {
         rebuildGeometry();
 #ifdef __APPLE__
-        if (!surfaceVbo) glGenBuffers(1, &surfaceVbo);
-        if (!lineVbo) glGenBuffers(1, &lineVbo);
-        glBindBuffer(GL_ARRAY_BUFFER, surfaceVbo);
-        glBufferData(GL_ARRAY_BUFFER,
-                     surfaceVertices.size() * sizeof(RenderVertex),
-                     surfaceVertices.data(), GL_DYNAMIC_DRAW);
-        glBindBuffer(GL_ARRAY_BUFFER, lineVbo);
-        glBufferData(GL_ARRAY_BUFFER,
-                     lineVertices.size() * sizeof(RenderVertex),
-                     lineVertices.data(), GL_DYNAMIC_DRAW);
+        const auto upload = [](GLuint& vbo, size_t& capacity,
+                               const std::vector<RenderVertex>& vertices) {
+            if (!vbo) glGenBuffers(1, &vbo);
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            const size_t bytes = vertices.size() * sizeof(RenderVertex);
+            const size_t desiredCapacity = vertices.capacity() * sizeof(RenderVertex);
+            if (desiredCapacity > capacity) {
+                capacity = desiredCapacity;
+                glBufferData(GL_ARRAY_BUFFER, capacity, nullptr, GL_DYNAMIC_DRAW);
+            }
+            if (bytes) {
+                glBufferSubData(GL_ARRAY_BUFFER, 0, bytes, vertices.data());
+            }
+        };
+        upload(surfaceVbo, surfaceVboCapacity, surfaceVertices);
+        upload(lineVbo, lineVboCapacity, lineVertices);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
 #endif
         geometryDirty = false;

@@ -29,8 +29,8 @@ void FFTVisualDataThread::run() {
     SpectrumVisualDataQueuePtr pipeFFTDataOut = std::static_pointer_cast<SpectrumVisualDataQueue>(getOutputQueue("FFTDataOutput"));
     
 
-    fftQueue->set_max_num_items(100); 
-    pipeFFTDataOut->set_max_num_items(100);
+    fftQueue->set_max_num_items(8);
+    pipeFFTDataOut->set_max_num_items(3);
 
     //FFT distributor plumbing:
     // IQDataInput push samples to process to FFT Data distributor. 
@@ -86,4 +86,3 @@ void FFTVisualDataThread::terminate() {
     fftDistrib.flushQueues();
     wproc.flushQueues();
 }
-

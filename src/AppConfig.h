@@ -96,6 +96,7 @@ public:
 
 
     AppConfig();
+    ~AppConfig();
     std::string getConfigDir();
     DeviceConfig *getDevice(const std::string& deviceId);
 

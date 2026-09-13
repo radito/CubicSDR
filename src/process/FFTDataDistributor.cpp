@@ -45,7 +45,8 @@ void FFTDataDistributor::process() {
                 bufferMax = std::max((size_t)(inp->sampleRate * FFT_DISTRIBUTOR_BUFFER_IN_SECONDS), (size_t)(1.2 * fftSize.load()));
 
 //                std::cout << "Buffer Max: " << bufferMax << std::endl;
-                bufferOffset = 0;
+                bufferRead = 0;
+                bufferWrite = 0;
                 bufferedItems = 0;
 				inputBuffer.sampleRate = inp->sampleRate;
 				inputBuffer.frequency = inp->frequency;
@@ -56,27 +57,33 @@ void FFTDataDistributor::process() {
             if (bufferMax < (size_t)(1.2 * fftSize.load())) {
                 bufferMax = (size_t)(1.2 * fftSize.load());
                 inputBuffer.data.resize(bufferMax);
+                // The ring modulus changed; discard stale visual samples rather
+                // than moving them into the new layout.
+                bufferRead = 0;
+                bufferWrite = 0;
+                bufferedItems = 0;
             }
 
-            size_t nbSamplesToAdd = inp->data.size();
-
-            //No room left in inputBuffer.data to accept inp->data.size() more samples.
-            //so make room by sliding left of bufferOffset, which is fine because 
-            //those samples has already been processed.
-            if ((bufferOffset + bufferedItems + inp->data.size()) > bufferMax) {
-                memmove(&inputBuffer.data[0], &inputBuffer.data[bufferOffset], bufferedItems*sizeof(liquid_float_complex));
-                bufferOffset = 0;
-                //if there are too much samples, we may even overflow !
-                //as a fallback strategy, drop the last incoming new samples not fitting in inputBuffer.data.
-                if (bufferedItems + inp->data.size() > bufferMax) {
-                    //clamp nbSamplesToAdd
-                    nbSamplesToAdd = bufferMax - bufferedItems;
-                    std::cout << "FFTDataDistributor::process() incoming samples overflow, dropping the last " << (inp->data.size() - nbSamplesToAdd) << " input samples..." << std::endl;
-                }
+            const size_t nbSamplesToAdd = std::min(inp->data.size(),
+                                                   bufferMax - bufferedItems);
+            if (nbSamplesToAdd < inp->data.size()) {
+                std::cout << "FFTDataDistributor::process() incoming samples overflow, dropping the last "
+                          << (inp->data.size() - nbSamplesToAdd)
+                          << " input samples..." << std::endl;
             }
-            
-            //store nbSamplesToAdd incoming samples. 
-            memcpy(&inputBuffer.data[bufferOffset+bufferedItems],&inp->data[0], nbSamplesToAdd *sizeof(liquid_float_complex));
+
+            // Append through the circular buffer without sliding unread data.
+            const size_t firstCopy = std::min(nbSamplesToAdd, bufferMax - bufferWrite);
+            if (firstCopy) {
+                std::copy_n(inp->data.data(), firstCopy,
+                            inputBuffer.data.data() + bufferWrite);
+            }
+            const size_t secondCopy = nbSamplesToAdd - firstCopy;
+            if (secondCopy) {
+                std::copy_n(inp->data.data() + firstCopy, secondCopy,
+                            inputBuffer.data.data());
+            }
+            bufferWrite = (bufferWrite + nbSamplesToAdd) % bufferMax;
             bufferedItems += nbSamplesToAdd;
             //
 		
@@ -115,8 +122,16 @@ void FFTDataDistributor::process() {
 
 						outp->frequency = inputBuffer.frequency;
 						outp->sampleRate = inputBuffer.sampleRate;
-						outp->data.assign(inputBuffer.data.begin()+bufferOffset+i,
-                                          inputBuffer.data.begin()+bufferOffset+i+ fftSize);
+                        outp->data.resize(fftSize);
+                        const size_t frameStart = (bufferRead + i) % bufferMax;
+                        const size_t firstCopy = std::min<size_t>(fftSize,
+                                                                 bufferMax - frameStart);
+                        std::copy_n(inputBuffer.data.data() + frameStart, firstCopy,
+                                    outp->data.data());
+                        if (firstCopy < fftSize) {
+                            std::copy_n(inputBuffer.data.data(), fftSize - firstCopy,
+                                        outp->data.data() + firstCopy);
+                        }
                         //authorize distribute with losses
 						distribute(outp, NON_BLOCKING_TIMEOUT);
 
@@ -128,16 +143,16 @@ void FFTDataDistributor::process() {
 					numProcessed += fftSize;
 				} //end for 
 			}
-            //advance bufferOffset read pointer, 
+            // Advance the circular read pointer,
             //reduce size of bufferedItems.
 			if (numProcessed) {
                 bufferedItems -= numProcessed;
-                bufferOffset += numProcessed;
+                bufferRead = (bufferRead + numProcessed) % bufferMax;
             }
             //clamp to zero the number of remaining items.
             if (bufferedItems <= 0) {
                 bufferedItems = 0;
-                bufferOffset = 0;
+                bufferRead = bufferWrite;
             }
 		} //end if bufferedItems >= fftSize
 	} //en while

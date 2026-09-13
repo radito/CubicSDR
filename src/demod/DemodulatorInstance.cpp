@@ -55,8 +55,7 @@ DemodulatorInstance::DemodulatorInstance() {
     follow.store(false);
     tracking.store(false);
 
-    label.store(new std::string("Unnamed"));
-    user_label.store(new std::wstring());
+    label = "Unnamed";
 
     pipeIQInputData = std::make_shared<DemodulatorThreadInputQueue>();
     pipeIQInputData->set_max_num_items(8);
@@ -191,12 +190,13 @@ void DemodulatorInstance::terminate() {
 }
 
 std::string DemodulatorInstance::getLabel() {
-    return *(label.load());
+    std::lock_guard<std::mutex> lock(labelMutex);
+    return label;
 }
 
 void DemodulatorInstance::setLabel(std::string labelStr) {
-   
-    delete label.exchange(new std::string(labelStr));
+    std::lock_guard<std::mutex> lock(labelMutex);
+    label = std::move(labelStr);
 }
 
 std::string DemodulatorInstance::getModemStatus() {
@@ -406,12 +406,13 @@ std::string DemodulatorInstance::getDemodulatorType() {
 }
 
 std::wstring DemodulatorInstance::getDemodulatorUserLabel() {
-    return *(user_label.load());
+    std::lock_guard<std::mutex> lock(labelMutex);
+    return user_label;
 }
 
 void DemodulatorInstance::setDemodulatorUserLabel(const std::wstring& demod_user_label) {
-   
-    delete user_label.exchange(new std::wstring(demod_user_label));
+    std::lock_guard<std::mutex> lock(labelMutex);
+    user_label = demod_user_label;
 }
 
 void DemodulatorInstance::setDemodulatorLock(bool demod_lock_in) {

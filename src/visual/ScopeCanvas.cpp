@@ -53,6 +53,8 @@ ScopeCanvas::ScopeCanvas(wxWindow *parent, const wxGLAttributes& dispAttrs) : In
 ScopeCanvas::~ScopeCanvas() {
     glContext->SetCurrent(*this);
     historyPanel.releaseGL();
+    delete glContext;
+    glContext = nullptr;
 }
 
 bool ScopeCanvas::scopeVisible() {

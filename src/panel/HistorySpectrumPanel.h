@@ -5,8 +5,8 @@
 
 #include "GLPanel.h"
 
+#include <array>
 #include <chrono>
-#include <deque>
 
 class HistorySpectrumPanel : public GLPanel {
 public:
@@ -20,7 +20,7 @@ public:
     void setHistoryShift(float shiftX) { historyShiftX = shiftX; geometryDirty = true; }
     void clear();
     void releaseGL();
-    size_t historySize() const { return history.size(); }
+    size_t historySize() const { return historyCount; }
 
 protected:
     void drawPanelContents() override;
@@ -29,7 +29,10 @@ private:
     static constexpr size_t HISTORY_BINS = 256;
     static constexpr size_t HISTORY_ROWS = 96;
 
-    std::deque<std::vector<float>> history;
+    using HistoryRow = std::array<float, HISTORY_BINS>;
+    std::array<HistoryRow, HISTORY_ROWS> history{};
+    size_t historyCount = 0;
+    size_t historyHead = 0;
     float floorValue = -100.0f;
     float ceilValue = 0.0f;
     int lastSampleRate = 0;
@@ -49,9 +52,12 @@ private:
 #ifdef __APPLE__
     GLuint surfaceVbo = 0;
     GLuint lineVbo = 0;
+    size_t surfaceVboCapacity = 0;
+    size_t lineVboCapacity = 0;
 #endif
 
     bool beginAppend(float floorDb, float ceilDb, int streamRate);
-    void appendRow(std::vector<float>&& row);
+    void appendRow(HistoryRow&& row);
+    const HistoryRow& historyRow(size_t logicalIndex) const;
     void rebuildGeometry();
 };

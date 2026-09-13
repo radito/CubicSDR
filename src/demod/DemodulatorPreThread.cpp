@@ -74,7 +74,6 @@ void DemodulatorPreThread::run() {
     iqInputQueue = std::static_pointer_cast<DemodulatorThreadInputQueue>(getInputQueue("IQDataInput"));
     iqOutputQueue = std::static_pointer_cast<DemodulatorThreadPostInputQueue>(getOutputQueue("IQDataOutput"));
     
-    std::vector<liquid_float_complex> in_buf_data;
     std::vector<liquid_float_complex> out_buf_data;
 
     t_Worker = new std::thread(&DemodulatorWorkerThread::threadMain, workerThread);
@@ -191,47 +190,30 @@ void DemodulatorPreThread::run() {
             }
             size_t bufSize = data->size();
 
-            if (in_buf_data.size() != bufSize) {
-                if (in_buf_data.capacity() < bufSize) {
-                    in_buf_data.reserve(bufSize);
-                    out_buf_data.reserve(bufSize);
-                }
-                in_buf_data.resize(bufSize);
-                out_buf_data.resize(bufSize);
-            }
-
-            in_buf_data.assign(inp->data.begin(), inp->data.end());
-
-            liquid_float_complex *in_buf = &in_buf_data[0];
-            liquid_float_complex *out_buf = &out_buf_data[0];
-            liquid_float_complex *temp_buf;
+            liquid_float_complex *in_buf = data->data();
 
             if (shiftFrequency != 0) {
+                out_buf_data.resize(bufSize);
                 if (shiftFrequency < 0) {
-                    nco_crcf_mix_block_up(freqShifter, in_buf, out_buf, bufSize);
+                    nco_crcf_mix_block_up(freqShifter, in_buf,
+                                          out_buf_data.data(), bufSize);
                 } else {
-                    nco_crcf_mix_block_down(freqShifter, in_buf, out_buf, bufSize);
+                    nco_crcf_mix_block_down(freqShifter, in_buf,
+                                            out_buf_data.data(), bufSize);
                 }
-                temp_buf = in_buf;
-                in_buf = out_buf;
-                out_buf = temp_buf;
+                in_buf = out_buf_data.data();
             }
 
             DemodulatorThreadPostIQDataPtr resamp = buffers.getBuffer();
 
             size_t out_size = ceil((double) (bufSize) * iqResampleRatio) + 512;
 
-            if (resampledData.size() != out_size) {
-                if (resampledData.capacity() < out_size) {
-                    resampledData.reserve(out_size);
-                }
-                resampledData.resize(out_size);
-            }
+            resamp->data.resize(out_size);
 
             unsigned int numWritten;
-            msresamp_crcf_execute(iqResampler, in_buf, bufSize, &resampledData[0], &numWritten);
-
-            resamp->data.assign(resampledData.begin(), resampledData.begin() + numWritten);
+            msresamp_crcf_execute(iqResampler, in_buf, bufSize,
+                                  resamp->data.data(), &numWritten);
+            resamp->data.resize(numWritten);
 
             resamp->modemType = cModem->getType();
             resamp->modemName = cModem->getName();

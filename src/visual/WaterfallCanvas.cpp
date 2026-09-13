@@ -53,7 +53,12 @@ WaterfallCanvas::WaterfallCanvas(wxWindow *parent, const wxGLAttributes& dispAtt
     fft_size_changed.store(false);
 }
 
-WaterfallCanvas::~WaterfallCanvas() = default;
+WaterfallCanvas::~WaterfallCanvas() {
+    glContext->SetCurrent(*this);
+    waterfallPanel.releaseGL();
+    delete glContext;
+    glContext = nullptr;
+}
 
 void WaterfallCanvas::setup(unsigned int fft_size_in, int waterfall_lines_in) {
     if (fft_size == fft_size_in && waterfall_lines_in == waterfall_lines) {

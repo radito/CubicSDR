@@ -3,7 +3,27 @@
 
 #include "WaterfallPanel.h"
 
-WaterfallPanel::WaterfallPanel() : GLPanel(), fft_size(0), waterfall_lines(0), waterfall_slice(nullptr), activeTheme(nullptr) {
+#include <algorithm>
+#include <array>
+
+#ifdef __APPLE__
+namespace {
+GLuint compileWaterfallShader(GLenum type, const char *source) {
+    const GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &source, nullptr);
+    glCompileShader(shader);
+    GLint compiled = GL_FALSE;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    if (compiled != GL_TRUE) {
+        glDeleteShader(shader);
+        return 0;
+    }
+    return shader;
+}
+}
+#endif
+
+WaterfallPanel::WaterfallPanel() : GLPanel(), fft_size(0), waterfall_lines(0), activeTheme(nullptr) {
 	setFillColor(RGBA4f(0,0,0));
     for (unsigned int & i : waterfall) {
         i = 0;
@@ -24,6 +44,12 @@ void WaterfallPanel::setup(unsigned int fft_size_in, int num_waterfall_lines_in)
 }
 
 void WaterfallPanel::refreshTheme() {
+#ifdef __APPLE__
+    if (usePaletteShader) {
+        updatePaletteTexture();
+        return;
+    }
+#endif
     glEnable (GL_TEXTURE_2D);
     
     for (unsigned int i : waterfall) {
@@ -52,8 +78,6 @@ void WaterfallPanel::step() {
     unsigned int half_fft_size = fft_size / 2;
 
     if (!bufferInitialized.load()) {
-        delete waterfall_slice;
-        waterfall_slice = new unsigned char[half_fft_size];
         bufferInitialized.store(true);
     }
     
@@ -63,20 +87,20 @@ void WaterfallPanel::step() {
     
     if (!points.empty() && points.size() == fft_size) {
         for (int j = 0; j < 2; j++) {
+            const unsigned int line = lines_buffered.load();
+            const unsigned int newBufSize = half_fft_size * (line + 1);
+            if (lineBuffer[j].size() < newBufSize) {
+                lineBuffer[j].resize(newBufSize);
+                rLineBuffer[j].resize(newBufSize);
+            }
+            unsigned char *destination = lineBuffer[j].data() + half_fft_size * line;
             for (unsigned int i = 0, iMax = half_fft_size; i < iMax; i++) {
                 float v = points[j * half_fft_size + i];
                 
                 float wv = v < 0 ? 0 : (v > 0.99 ? 0.99 : v);
                 
-                waterfall_slice[i] = (unsigned char) floor(wv * 255.0);
+                destination[i] = (unsigned char) floor(wv * 255.0);
             }
-            
-            unsigned int newBufSize = (half_fft_size*lines_buffered.load()+half_fft_size);
-            if (lineBuffer[j].size() < newBufSize) {
-                lineBuffer[j].resize(newBufSize);
-                rLineBuffer[j].resize(newBufSize);
-            }
-            memcpy(&(lineBuffer[j][half_fft_size*lines_buffered.load()]), waterfall_slice, sizeof(unsigned char) * half_fft_size);
         }
         lines_buffered++;
     }
@@ -90,6 +114,9 @@ void WaterfallPanel::update() {
     }
     
     if (!texInitialized.load()) {
+#ifdef __APPLE__
+        initializePaletteShader();
+#endif
         for (int i = 0; i < 2; i++) {
             if (waterfall[i]) {
                 glDeleteTextures(1, &waterfall[i]);
@@ -119,7 +146,18 @@ void WaterfallPanel::update() {
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
             
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, half_fft_size, waterfall_lines, 0, GL_COLOR_INDEX, GL_UNSIGNED_BYTE, (GLvoid *) waterfall_tex);
+#ifdef __APPLE__
+            if (usePaletteShader) {
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE8,
+                             half_fft_size, waterfall_lines, 0, GL_LUMINANCE,
+                             GL_UNSIGNED_BYTE, (GLvoid *) waterfall_tex);
+            } else
+#endif
+            {
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, half_fft_size,
+                             waterfall_lines, 0, GL_COLOR_INDEX,
+                             GL_UNSIGNED_BYTE, (GLvoid *) waterfall_tex);
+            }
         }
         
         delete[] waterfall_tex;
@@ -144,8 +182,13 @@ void WaterfallPanel::update() {
         }
         for (int j = 0; j < 2; j++) {
             glBindTexture(GL_TEXTURE_2D, waterfall[j]);
+#ifdef __APPLE__
+            const GLenum inputFormat = usePaletteShader ? GL_LUMINANCE : GL_COLOR_INDEX;
+#else
+            const GLenum inputFormat = GL_COLOR_INDEX;
+#endif
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, waterfall_ofs[j]-run_lines, half_fft_size, run_lines,
-                            GL_COLOR_INDEX, GL_UNSIGNED_BYTE, (GLvoid *) &(rLineBuffer[j][run_ofs]));
+                            inputFormat, GL_UNSIGNED_BYTE, (GLvoid *) &(rLineBuffer[j][run_ofs]));
             
             waterfall_ofs[j]-=run_lines;
             
@@ -186,6 +229,16 @@ void WaterfallPanel::drawPanelContents() {
     float half_texel = 1.0 / (float) half_fft_size;
     float vtexel = 1.0 / (float) waterfall_lines;
     float vofs = (float) (waterfall_ofs[0]) * vtexel;
+
+#ifdef __APPLE__
+    if (usePaletteShader) {
+        glUseProgram(paletteProgram);
+        glActiveTexture(GL_TEXTURE1);
+        glEnable(GL_TEXTURE_1D);
+        glBindTexture(GL_TEXTURE_1D, paletteTexture);
+        glActiveTexture(GL_TEXTURE0);
+    }
+#endif
     
     glBindTexture(GL_TEXTURE_2D, waterfall[0]);
     glBegin (GL_QUADS);
@@ -213,7 +266,117 @@ void WaterfallPanel::drawPanelContents() {
     glEnd();
     
     glBindTexture(GL_TEXTURE_2D, 0);
+
+#ifdef __APPLE__
+    if (usePaletteShader) {
+        glUseProgram(0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_1D, 0);
+        glDisable(GL_TEXTURE_1D);
+        glActiveTexture(GL_TEXTURE0);
+    }
+#endif
     
     glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
     glDisable(GL_TEXTURE_2D);
 }
+
+void WaterfallPanel::releaseGL() {
+    glDeleteTextures(2, waterfall);
+    waterfall[0] = waterfall[1] = 0;
+#ifdef __APPLE__
+    if (paletteTexture) glDeleteTextures(1, &paletteTexture);
+    if (paletteProgram) glDeleteProgram(paletteProgram);
+    paletteTexture = 0;
+    paletteProgram = 0;
+#endif
+}
+
+#ifdef __APPLE__
+void WaterfallPanel::initializePaletteShader() {
+    if (paletteShaderAttempted) return;
+    paletteShaderAttempted = true;
+
+    static const char *vertexSource =
+        "#version 120\n"
+        "varying vec2 textureCoordinate;\n"
+        "void main() {\n"
+        "  gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;\n"
+        "  textureCoordinate = gl_MultiTexCoord0.xy;\n"
+        "}\n";
+    static const char *fragmentSource =
+        "#version 120\n"
+        "uniform sampler2D waterfallTexture;\n"
+        "uniform sampler1D colorPalette;\n"
+        "varying vec2 textureCoordinate;\n"
+        "void main() {\n"
+        "  float level = texture2D(waterfallTexture, textureCoordinate).r;\n"
+        "  gl_FragColor = texture1D(colorPalette, level);\n"
+        "}\n";
+
+    const GLuint vertex = compileWaterfallShader(GL_VERTEX_SHADER, vertexSource);
+    const GLuint fragment = compileWaterfallShader(GL_FRAGMENT_SHADER, fragmentSource);
+    if (!vertex || !fragment) {
+        if (vertex) glDeleteShader(vertex);
+        if (fragment) glDeleteShader(fragment);
+        return;
+    }
+
+    paletteProgram = glCreateProgram();
+    glAttachShader(paletteProgram, vertex);
+    glAttachShader(paletteProgram, fragment);
+    glLinkProgram(paletteProgram);
+    glDeleteShader(vertex);
+    glDeleteShader(fragment);
+
+    GLint linked = GL_FALSE;
+    glGetProgramiv(paletteProgram, GL_LINK_STATUS, &linked);
+    if (linked != GL_TRUE) {
+        glDeleteProgram(paletteProgram);
+        paletteProgram = 0;
+        return;
+    }
+
+    waterfallSampler = glGetUniformLocation(paletteProgram, "waterfallTexture");
+    paletteSampler = glGetUniformLocation(paletteProgram, "colorPalette");
+    glUseProgram(paletteProgram);
+    glUniform1i(waterfallSampler, 0);
+    glUniform1i(paletteSampler, 1);
+    glUseProgram(0);
+    glGenTextures(1, &paletteTexture);
+    usePaletteShader = paletteTexture != 0;
+}
+
+void WaterfallPanel::updatePaletteTexture() {
+    if (!paletteTexture) return;
+    constexpr size_t paletteSize = 256;
+    std::array<unsigned char, paletteSize * 4> palette{};
+    auto& gradient = ThemeMgr::mgr.currentTheme->waterfallGradient;
+    const auto& red = gradient.getRed();
+    const auto& green = gradient.getGreen();
+    const auto& blue = gradient.getBlue();
+    if (red.empty() || green.empty() || blue.empty()) return;
+
+    for (size_t i = 0; i < paletteSize; ++i) {
+        const size_t source = std::min(i, red.size() - 1);
+        palette[i * 4] = static_cast<unsigned char>(
+            std::clamp(red[source], 0.0f, 1.0f) * 255.0f);
+        palette[i * 4 + 1] = static_cast<unsigned char>(
+            std::clamp(green[std::min(i, green.size() - 1)], 0.0f, 1.0f) * 255.0f);
+        palette[i * 4 + 2] = static_cast<unsigned char>(
+            std::clamp(blue[std::min(i, blue.size() - 1)], 0.0f, 1.0f) * 255.0f);
+        palette[i * 4 + 3] = 255;
+    }
+
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_1D, paletteTexture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage1D(GL_TEXTURE_1D, 0, GL_RGBA8, paletteSize, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, palette.data());
+    glBindTexture(GL_TEXTURE_1D, 0);
+    glActiveTexture(GL_TEXTURE0);
+}
+#endif

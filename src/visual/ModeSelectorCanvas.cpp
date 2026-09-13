@@ -35,7 +35,10 @@ InteractiveCanvas(parent, dispAttrs), numChoices(0), currentSelection(-1), toggl
     highlightColor = RGBA4f(1.0,1.0,1.0,1.0);
 }
 
-ModeSelectorCanvas::~ModeSelectorCanvas() = default;
+ModeSelectorCanvas::~ModeSelectorCanvas() {
+    delete glContext;
+    glContext = nullptr;
+}
 
 int ModeSelectorCanvas::getHoveredSelection() {
     if (!mouseTracker.mouseInView()) {

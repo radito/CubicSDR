@@ -56,7 +56,10 @@ TuningCanvas::TuningCanvas(wxWindow *parent, const wxGLAttributes& dispAttrs) :
     currentPPM = lastPPM = 0;
 }
 
-TuningCanvas::~TuningCanvas() = default;
+TuningCanvas::~TuningCanvas() {
+    delete glContext;
+    glContext = nullptr;
+}
 
 bool TuningCanvas::changed() {
 

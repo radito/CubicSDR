@@ -36,7 +36,10 @@ MeterCanvas::MeterCanvas(wxWindow *parent, const wxGLAttributes& dispAttrs) :
     glContext = new MeterContext(this, &wxGetApp().GetContext(this), wxGetApp().GetContextAttributes());
 }
 
-MeterCanvas::~MeterCanvas() = default;
+MeterCanvas::~MeterCanvas() {
+    delete glContext;
+    glContext = nullptr;
+}
 
 void MeterCanvas::setLevel(float level_in) {
     level = level_in;

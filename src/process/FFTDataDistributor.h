@@ -26,6 +26,7 @@ protected:
     unsigned int linesPerSecond;
     double lineRateAccum;
     size_t bufferMax = 0;
-    size_t bufferOffset = 0;
+    size_t bufferRead = 0;
+    size_t bufferWrite = 0;
     size_t bufferedItems = 0;
 };

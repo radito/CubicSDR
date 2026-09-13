@@ -159,11 +159,12 @@ private:
     //protects child thread creation and termination 
     std::recursive_mutex m_thread_control_mutex;
 
-    std::atomic<std::string *> label; //
+    std::mutex labelMutex;
+    std::string label;
     std::mutex modemStatusMutex;
     std::string modemStatus;
     // User editable buffer, 16 bit string.
-    std::atomic<std::wstring *> user_label; 
+    std::wstring user_label;
 
     std::atomic_bool active;
     std::atomic_bool muted;

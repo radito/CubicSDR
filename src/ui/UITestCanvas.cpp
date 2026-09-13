@@ -32,7 +32,10 @@ InteractiveCanvas(parent, dispAttrs) {
     glContext = new UITestContext(this, &wxGetApp().GetContext(this), wxGetApp().GetContextAttributes());
 }
 
-UITestCanvas::~UITestCanvas() = default;
+UITestCanvas::~UITestCanvas() {
+    delete glContext;
+    glContext = nullptr;
+}
 
 void UITestCanvas::OnPaint(wxPaintEvent& WXUNUSED(event)) {
   //  wxPaintDC dc(this);
