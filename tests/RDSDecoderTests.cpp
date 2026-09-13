@@ -3,7 +3,9 @@
 #include "TestHarness.h"
 #include "RDSDecoder.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -50,6 +52,33 @@ void appendEncodedBlock(std::vector<liquid_float_complex>& samples,
             samples.push_back(value);
         }
     }
+}
+
+void appendBlockBits(std::vector<bool>& bits, uint32_t block) {
+    for (int bit = 25; bit >= 0; --bit) bits.push_back((block >> bit) & 1u);
+}
+
+std::vector<liquid_float_complex> makeClockDriftSamples(
+        const std::vector<bool>& bits) {
+    std::vector<liquid_float_complex> samples;
+    float differentialState = 1.0f;
+    size_t outputIndex = 0;
+    for (size_t bitIndex = 0; bitIndex < bits.size(); ++bitIndex) {
+        if (bits[bitIndex]) differentialState = -differentialState;
+        // About +0.9% clock error, large enough to cross timing phases during
+        // a short test while remaining inside the synchronizer pull range.
+        const size_t symbolSamples = bitIndex % 7 == 0 ? 17 : 16;
+        for (size_t sample = 0; sample < symbolSamples; ++sample, ++outputIndex) {
+            const float symbol = sample * 2 < symbolSamples
+                ? differentialState : -differentialState;
+            const float noise = 0.08f * std::sin(0.37f * float(outputIndex));
+            liquid_float_complex value;
+            value.real = symbol + noise;
+            value.imag = 0.3f * symbol - 0.5f * noise;
+            samples.push_back(value);
+        }
+    }
+    return samples;
 }
 
 } // namespace
@@ -120,17 +149,95 @@ CUBIC_TEST(rds_decoder_recovers_streamed_biphase_samples) {
     CUBIC_REQUIRE(status == "RDS -");
 }
 
+CUBIC_TEST(rds_decoder_acquires_with_clock_drift_and_noise) {
+    constexpr std::array<uint16_t, 4> offsets{{0x0FC, 0x198, 0x168, 0x1B4}};
+    std::vector<bool> bits{false}; // Prime differential decoding.
+    for (uint16_t group = 0; group < 8; ++group) {
+        const uint16_t segment = group & 3u;
+        const uint16_t words[4] = {
+            0xCAFE,
+            static_cast<uint16_t>((10u << 5) | segment),
+            0,
+            static_cast<uint16_t>(0x4141u + segment)
+        };
+        for (size_t block = 0; block < 4; ++block) {
+            appendBlockBits(bits, makeBlock(words[block], offsets[block]));
+        }
+    }
+    const auto samples = makeClockDriftSamples(bits);
+
+    RDSDecoder decoder;
+    for (size_t offset = 0; offset < samples.size();) {
+        const size_t count = std::min<size_t>(137, samples.size() - offset);
+        decoder.process(samples.data() + offset, count);
+        offset += count;
+    }
+
+    std::string status;
+    CUBIC_REQUIRE(decoder.takeUpdate(status));
+    CUBIC_REQUIRE(status.find("RDS SYNC CAFE") == 0);
+}
+
 CUBIC_TEST(rds_decoder_corrects_a_single_corrupt_bit) {
+    for (int damagedBit = 0; damagedBit < 26; ++damagedBit) {
+        RDSDecoder decoder;
+        std::string status;
+        CUBIC_REQUIRE(decoder.takeUpdate(status));
+        for (int group = 0; group < 2; ++group) {
+            feedBlock(decoder, makeBlock(0x1234, 0x0FC));
+            feedBlock(decoder, makeBlock(0x0000, 0x198) ^ (1u << damagedBit));
+            feedBlock(decoder, makeBlock(0x0000, 0x168));
+            feedBlock(decoder, makeBlock(0x4142, 0x1B4));
+        }
+
+        CUBIC_REQUIRE(decoder.takeUpdate(status));
+        CUBIC_REQUIRE(status == "RDS SYNC 1234 | None | TP:off TA:off");
+    }
+}
+
+CUBIC_TEST(rds_decoder_retains_cadence_after_one_bad_block) {
+    RDSDecoder decoder;
+    std::string status;
+    CUBIC_REQUIRE(decoder.takeUpdate(status));
+
+    for (int group = 0; group < 2; ++group) {
+        feedGroup(decoder, 0x1234, 0x0000, 0x4142);
+    }
+    CUBIC_REQUIRE(decoder.takeUpdate(status));
+
+    const uint32_t damagedB = makeBlock(0x0000, 0x198) ^ (1u << 3) ^ (1u << 12);
+    for (int bit = 0; bit < 26; ++bit) {
+        CUBIC_REQUIRE(blockSyndrome(damagedB ^ (1u << bit)) != 0x198);
+    }
+    feedBlock(decoder, makeBlock(0x1234, 0x0FC));
+    feedBlock(decoder, damagedB);
+    feedBlock(decoder, makeBlock(0x0000, 0x168));
+    feedBlock(decoder, makeBlock(0x4142, 0x1B4));
+
+    // The next clean group is accepted immediately because cadence survived.
+    feedGroup(decoder, 0x1234, static_cast<uint16_t>(10u << 5), 0x4142);
+    CUBIC_REQUIRE(decoder.takeUpdate(status));
+    CUBIC_REQUIRE(status == "RDS SYNC 1234 | Pop Music | TP:off TA:off");
+}
+
+CUBIC_TEST(rds_decoder_drops_cadence_after_two_bad_blocks) {
     RDSDecoder decoder;
     std::string status;
     CUBIC_REQUIRE(decoder.takeUpdate(status));
     for (int group = 0; group < 2; ++group) {
-        feedBlock(decoder, makeBlock(0x1234, 0x0FC));
-        feedBlock(decoder, makeBlock(0x0000, 0x198) ^ (1u << 12));
-        feedBlock(decoder, makeBlock(0x0000, 0x168));
-        feedBlock(decoder, makeBlock(0x4142, 0x1B4));
+        feedGroup(decoder, 0x1234, 0x0000, 0x4142);
     }
+    CUBIC_REQUIRE(decoder.takeUpdate(status));
+
+    feedBlock(decoder, makeBlock(0x1234, 0x0FC));
+    feedBlock(decoder, makeBlock(0x0000, 0x198) ^ (1u << 3) ^ (1u << 12));
+    feedBlock(decoder, makeBlock(0x0000, 0x168) ^ (1u << 4) ^ (1u << 13));
+    feedBlock(decoder, makeBlock(0x4142, 0x1B4));
+
+    feedGroup(decoder, 0x1234, static_cast<uint16_t>(10u << 5), 0x4142);
+    CUBIC_REQUIRE(!decoder.takeUpdate(status));
+    feedGroup(decoder, 0x1234, static_cast<uint16_t>(10u << 5), 0x4142);
 
     CUBIC_REQUIRE(decoder.takeUpdate(status));
-    CUBIC_REQUIRE(status == "RDS SYNC 1234 | None | TP:off TA:off");
+    CUBIC_REQUIRE(status == "RDS SYNC 1234 | Pop Music | TP:off TA:off");
 }

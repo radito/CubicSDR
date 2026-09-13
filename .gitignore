@@ -4,3 +4,4 @@ cmake_build/
 dist/
 .DS_Store
 .vscode/
+*.profraw

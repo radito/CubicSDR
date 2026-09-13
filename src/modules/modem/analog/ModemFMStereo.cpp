@@ -14,6 +14,14 @@ void resetStereoPilot(nco_crcf pilot, long long sampleRate) {
     nco_crcf_set_frequency(
         pilot, 2.0f * float(M_PI) * STEREO_PILOT_HZ / float(sampleRate));
 }
+
+inline liquid_float_complex multiplyComplex(liquid_float_complex a,
+                                            liquid_float_complex b) {
+    liquid_float_complex result;
+    result.real = a.real * b.real - a.imag * b.imag;
+    result.imag = a.real * b.imag + a.imag * b.real;
+    return result;
+}
 }
 
 ModemFMStereo::ModemFMStereo() {
@@ -279,10 +287,13 @@ void ModemFMStereo::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInp
         nco_crcf_pll_step(fmkit->stereoPilot, phase_error);
         nco_crcf_step(fmkit->stereoPilot);
         
-        // 38khz down-mix
-        nco_crcf_mix_down(fmkit->stereoPilot, x, &y);
-        nco_crcf_mix_down(fmkit->stereoPilot, y, &x);
-        nco_crcf_mix_down(fmkit->stereoPilot, x, &rdsMixedData[i]);
+        // Fetch the updated phasor once and reuse its powers for the 38 kHz
+        // stereo and 57 kHz RDS down-mixes.
+        nco_crcf_cexpf(fmkit->stereoPilot, &w);
+        w.imag = -w.imag;
+        y = multiplyComplex(x, w);
+        x = multiplyComplex(y, w);
+        rdsMixedData[i] = multiplyComplex(x, w);
         
         // complex -> real
         float usb_discard;

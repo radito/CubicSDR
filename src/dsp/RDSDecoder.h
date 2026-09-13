@@ -9,12 +9,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 class RDSDecoder {
 public:
     static constexpr size_t SAMPLES_PER_BIT = 16;
 
     RDSDecoder();
+    ~RDSDecoder();
+    RDSDecoder(const RDSDecoder&) = delete;
+    RDSDecoder& operator=(const RDSDecoder&) = delete;
     void reset();
     void resetSignal();
     void process(const liquid_float_complex *samples, size_t count);
@@ -29,18 +33,27 @@ private:
         int countdown = 0;
         int expectedBlock = -1;
         int validGroups = 0;
+        int consecutiveErrors = 0;
+        bool groupValid = false;
         std::array<uint16_t, 4> words{};
     };
     struct PhaseState {
-        liquid_float_complex first{};
-        liquid_float_complex second{};
         liquid_float_complex previous{};
         bool havePrevious = false;
-        bool primed = false;
         BlockState blocks;
     };
 
     std::array<PhaseState, SAMPLES_PER_BIT> phases{};
+    std::array<PhaseState, 2> adaptivePhases{};
+    std::array<liquid_float_complex, SAMPLES_PER_BIT> sampleDelay{};
+    double matchedReal = 0.0;
+    double matchedImag = 0.0;
+    size_t sampleDelayFill = 0;
+    symsync_crcf timingSync = nullptr;
+    std::vector<liquid_float_complex> timingOutput;
+    liquid_float_complex previousAdaptiveChip{};
+    uint64_t adaptiveChipIndex = 0;
+    bool havePreviousAdaptiveChip = false;
     BlockState directBlocks;
     uint64_t sampleIndex = 0;
     uint16_t programId = 0;
@@ -55,8 +68,10 @@ private:
     bool updatePending = false;
 
     static uint16_t syndrome(uint32_t block);
-    void processSymbol(PhaseState& phase, liquid_float_complex symbol);
-    void processRecoveredBit(BlockState& state, bool bit);
+    void processSymbol(PhaseState& phase, liquid_float_complex symbol,
+                       bool allowTentativeSync = false);
+    void processRecoveredBit(BlockState& state, bool bit,
+                             bool allowTentativeSync = false);
     void acceptGroup(BlockState& state);
     void publishStatus(int validGroups);
     void publishSearching();
