@@ -837,6 +837,9 @@ IF (APPLE AND BUNDLE_APP)
     PROJECT(CubicSDR)
     set(CPACK_GENERATOR "DragNDrop")
     set(CPACK_BINARY_DRAGNDROP ON)
+    # Prefer macOS-native LZMA compression for smaller release images while
+    # preserving the standard mountable DMG format and all bundled contents.
+    set(CPACK_DMG_FORMAT "ULMO")
  
     SET(MACOSX_BUNDLE_BUNDLE_NAME CubicSDR)
     SET(CPACK_APPLE_BUNDLE_ID "com.cubicproductions.cubicsdr")
