@@ -123,6 +123,7 @@ private:
 	wxMenuItem *iqSwapMenuItem = nullptr;
 	wxMenuItem *agcMenuItem = nullptr;
 	wxMenuItem *rnnMenuItem = nullptr;
+	std::map<int, wxMenuItem *> rnnMenuItems;
 
 	wxMenu *sampleRateMenu = nullptr;
 
@@ -332,7 +333,9 @@ private:
 #define wxID_SDR_START_STOP 2010
 #define wxID_SET_DB_OFFSET 2012
 #define wxID_ABOUT_CUBICSDR 2013
-#define wxID_RNNOISE_CONTROL 2014
+#define wxID_RNNOISE_OFF 2014
+#define wxID_RNNOISE_MID 2015
+#define wxID_RNNOISE_STRONG 2016
 
 #define wxID_OPEN_BOOKMARKS 2020
 #define wxID_SAVE_BOOKMARKS 2021

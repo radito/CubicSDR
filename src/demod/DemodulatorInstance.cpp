@@ -63,7 +63,7 @@ DemodulatorInstance::DemodulatorInstance() {
     pipeIQDemodData->set_max_num_items(8);
     
     audioThread = new AudioThread();
-    audioThread->setDenoiseEnabled(wxGetApp().getDenoiseMode());
+    audioThread->setDenoiseMode(wxGetApp().getDenoiseMode());
             
     demodulatorPreThread = new DemodulatorPreThread(this);
     demodulatorPreThread->setInputQueue("IQDataInput",pipeIQInputData);
@@ -541,9 +541,14 @@ bool DemodulatorInstance::isDenoise() {
 }
 
 void DemodulatorInstance::setDenoise(bool denoise_in) {
+    setDenoiseMode(denoise_in ? DenoiseMode::Strong : DenoiseMode::Off);
+}
+
+void DemodulatorInstance::setDenoiseMode(DenoiseMode mode) {
+    const bool denoise_in = isDenoiseEnabled(mode);
     denoise = denoise_in;
     demodulatorThread->setDenoise(denoise_in);
-    audioThread->setDenoiseEnabled(denoise_in);
+    audioThread->setDenoiseMode(mode);
 }
 
 bool DemodulatorInstance::isRecording()

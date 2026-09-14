@@ -207,7 +207,7 @@ CubicSDR::CubicSDR()
       snap(1),
       sampleRate(DEFAULT_SAMPLE_RATE),
       agcMode(false),
-      denoiseMode(false) {
+      denoiseMode(DenoiseMode::Off) {
   config.load();
 
   sampleRateInitialized.store(false);
@@ -1139,11 +1139,11 @@ bool CubicSDR::getAGCMode() {
   return agcMode.load();
 }
 
-void CubicSDR::setDenoiseMode(bool mode) {
+void CubicSDR::setDenoiseMode(DenoiseMode mode) {
   denoiseMode.store(mode);
 }
 
-bool CubicSDR::getDenoiseMode() {
+DenoiseMode CubicSDR::getDenoiseMode() {
   return denoiseMode.load();
 }
 

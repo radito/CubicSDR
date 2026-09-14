@@ -14,6 +14,7 @@
 #include <cstddef>
 
 #include "DemodDefs.h"
+#include "DenoiseMode.h"
 #include "RtAudio.h"
 #include "ThreadBlockingQueue.h"
 
@@ -145,7 +146,10 @@ class AudioThread : public IOThread {
 
   void setGain(float gain_in);
 
-  void setDenoiseEnabled(bool enabled);
+  void setDenoiseMode(DenoiseMode mode);
+  void setDenoiseEnabled(bool enabled) {
+    setDenoiseMode(enabled ? DenoiseMode::Strong : DenoiseMode::Off);
+  }
 
   static std::map<int, int> deviceSampleRate;
 
@@ -187,7 +191,7 @@ class AudioThread : public IOThread {
 
   std::atomic_bool active;
   std::atomic_int outputDevice;
-  std::atomic_bool denoiseEnabled{false};
+  std::atomic<DenoiseMode> denoiseMode{DenoiseMode::Off};
 
   RtAudio dac;
   unsigned int nBufferFrames;
@@ -209,7 +213,8 @@ class AudioThread : public IOThread {
   // RNNoise runs on the per-demodulator AudioThread, outside CoreAudio's
   // real-time callback.
   std::mutex denoiseMutex;
-  DenoiseState* denoiseState = nullptr;
+  void* denoiseState = nullptr;
+  DenoiseMode denoiseProcessorMode = DenoiseMode::Off;
   std::array<float, RNNOISE_FRAME_SIZE> denoiseFrame{};
   size_t denoiseFrameFill = 0;
   int denoiseProcessorSampleRate = 0;

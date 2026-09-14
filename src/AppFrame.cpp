@@ -1050,8 +1050,16 @@ void AppFrame::handleUpdateDeviceParams() {
     }
     
     newSettingsMenu->AppendSeparator();
-    rnnMenuItem = newSettingsMenu->AppendCheckItem(wxID_RNNOISE_CONTROL, "Enable RNNoise");
-    rnnMenuItem->Check(wxGetApp().getDenoiseMode());
+    auto *rnnSubMenu = new wxMenu;
+    rnnMenuItems.clear();
+    rnnMenuItems[wxID_RNNOISE_OFF] = rnnSubMenu->AppendRadioItem(wxID_RNNOISE_OFF, "Off");
+    rnnMenuItems[wxID_RNNOISE_MID] = rnnSubMenu->AppendRadioItem(wxID_RNNOISE_MID, "Mid (Legacy)");
+    rnnMenuItems[wxID_RNNOISE_STRONG] = rnnSubMenu->AppendRadioItem(wxID_RNNOISE_STRONG, "Strong (New)");
+    const int rnnModeId = wxID_RNNOISE_OFF + static_cast<int>(wxGetApp().getDenoiseMode());
+    rnnMenuItems[rnnModeId]->Check(true);
+    rnnMenuItem = newSettingsMenu->AppendSubMenu(rnnSubMenu, "RNNoise");
+    rnnMenuItem->SetItemLabel(getSettingsLabel(
+        "RNNoise", rnnMenuItems[rnnModeId]->GetItemLabel().ToStdString()));
 
     //Add an Antenna menu if more than one (RX) antenna, to keep the UI free of useless entries
     antennaNames.clear();
@@ -2140,14 +2148,18 @@ bool AppFrame::actionOnMenuSDRStartStop(wxCommandEvent &event) {
 }
 
 bool AppFrame::actionOnRnnNoise(wxCommandEvent &event) {
-    if (event.GetId() == wxID_RNNOISE_CONTROL) {
-        bool setDenoise = event.IsChecked();
-        wxGetApp().setDenoiseMode(setDenoise);
+    if (event.GetId() >= wxID_RNNOISE_OFF && event.GetId() <= wxID_RNNOISE_STRONG) {
+        const DenoiseMode mode = static_cast<DenoiseMode>(event.GetId() - wxID_RNNOISE_OFF);
+        wxGetApp().setDenoiseMode(mode);
+        if (rnnMenuItem != nullptr) {
+            rnnMenuItem->SetItemLabel(getSettingsLabel(
+                "RNNoise", rnnMenuItems[event.GetId()]->GetItemLabel().ToStdString()));
+        }
         
         std::vector<DemodulatorInstancePtr> demods = wxGetApp().getDemodMgr().getDemodulators();
         
         for (auto &demod : demods) {
-            demod->setDenoise(setDenoise);
+            demod->setDenoiseMode(mode);
         }
 
         return true;

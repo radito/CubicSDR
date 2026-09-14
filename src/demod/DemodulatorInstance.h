@@ -115,6 +115,7 @@ public:
     void setMuted(bool muted_in);
 
     void setDenoise(bool denoise_in);
+    void setDenoiseMode(DenoiseMode mode);
     bool isDenoise();
 
     bool isRecording();

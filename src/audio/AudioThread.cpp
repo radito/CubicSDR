@@ -4,10 +4,97 @@
 #include "AudioThread.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <iostream>
 #include <mutex>
 #include <vector>
+#include <wx/filefn.h>
+#include <wx/filename.h>
+#include <wx/stdpaths.h>
 #include "CubicSDR.h"
 #include "DemodulatorInstance.h"
+#include "RNNoiseLegacy.h"
+
+namespace {
+
+constexpr const char* RNNOISE_MODEL_FILENAME = "rnnoise-model.bin";
+
+class RNNoiseModelStore {
+ public:
+  RNNoiseModelStore() {
+    const wxString modelName = wxString::FromUTF8(RNNOISE_MODEL_FILENAME);
+    std::vector<wxString> candidates;
+    candidates.emplace_back(
+        wxFileName(wxStandardPaths::Get().GetResourcesDir(), modelName).GetFullPath());
+
+    wxFileName executable(wxStandardPaths::Get().GetExecutablePath());
+    executable.SetFullName(modelName);
+    candidates.emplace_back(executable.GetFullPath());
+
+#ifdef RES_FOLDER
+    candidates.emplace_back(wxFileName(wxString::FromUTF8(RES_FOLDER), modelName).GetFullPath());
+#endif
+
+    for (const auto& candidate : candidates) {
+      if (!wxFileName::FileExists(candidate)) {
+        continue;
+      }
+
+      FILE* file = wxFopen(candidate, "rb");
+      if (file == nullptr) {
+        continue;
+      }
+
+      model = rnnoise_model_from_file(file);
+      if (model != nullptr) {
+        modelFile = file;
+        std::cout << "Loaded RNNoise model: " << candidate << std::endl;
+        return;
+      }
+      std::fclose(file);
+    }
+
+    std::cerr << "RNNoise model not found; noise reduction will be bypassed."
+              << std::endl;
+  }
+
+  ~RNNoiseModelStore() {
+    if (model != nullptr) {
+      rnnoise_model_free(model);
+    }
+    if (modelFile != nullptr) {
+      std::fclose(modelFile);
+    }
+  }
+
+  RNNModel* get() const { return model; }
+
+ private:
+  RNNModel* model = nullptr;
+  FILE* modelFile = nullptr;
+};
+
+RNNModel* getRNNoiseModel() {
+  static RNNoiseModelStore store;
+  return store.get();
+}
+
+void* createStrongDenoiseState() {
+  RNNModel* model = getRNNoiseModel();
+  return model == nullptr ? nullptr : rnnoise_create(model);
+}
+
+void* createDenoiseState(DenoiseMode mode) {
+  if (mode == DenoiseMode::Mid) {
+    return rnnoise_legacy_create(nullptr);
+  }
+  if (mode == DenoiseMode::Strong) {
+    return createStrongDenoiseState();
+  }
+  return nullptr;
+}
+
+}  // namespace
 
 //50 ms
 #define HEARTBEAT_CHECK_PERIOD_MICROS (50 * 1000)
@@ -335,7 +422,7 @@ void AudioThread::setSampleRate(int sampleRate_in) {
   }
 
   if (resetDenoise) {
-    setDenoiseEnabled(denoiseEnabled.load());
+    setDenoiseMode(denoiseMode.load());
   }
 }
 
@@ -534,7 +621,7 @@ void AudioThread::run() {
 
 void AudioThread::terminate() {
   IOThread::terminate();
-  denoiseEnabled.store(false);
+  denoiseMode.store(DenoiseMode::Off);
 
   {
     std::lock_guard<std::mutex> lock(denoiseMutex);
@@ -613,15 +700,12 @@ void AudioThread::setGain(float gain_in) {
   mixState->gain.store(gain_in, std::memory_order_release);
 }
 
-void AudioThread::setDenoiseEnabled(bool enabled) {
-  denoiseEnabled.store(enabled);
+void AudioThread::setDenoiseMode(DenoiseMode mode) {
+  denoiseMode.store(mode);
 
   {
     std::lock_guard<std::mutex> lock(denoiseMutex);
     resetDenoiseProcessorLocked();
-    if (enabled) {
-      denoiseState = rnnoise_create(nullptr);
-    }
   }
 
   std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -633,7 +717,11 @@ void AudioThread::setDenoiseEnabled(bool enabled) {
 
 void AudioThread::resetDenoiseProcessorLocked() {
   if (denoiseState != nullptr) {
-    rnnoise_destroy(denoiseState);
+    if (denoiseProcessorMode == DenoiseMode::Mid) {
+      rnnoise_legacy_destroy(static_cast<RNNoiseLegacyState*>(denoiseState));
+    } else if (denoiseProcessorMode == DenoiseMode::Strong) {
+      rnnoise_destroy(static_cast<DenoiseState*>(denoiseState));
+    }
     denoiseState = nullptr;
   }
   if (denoiseInputResampler != nullptr) {
@@ -647,6 +735,7 @@ void AudioThread::resetDenoiseProcessorLocked() {
   denoiseFrame.fill(0.0f);
   denoiseFrameFill = 0;
   denoiseProcessorSampleRate = 0;
+  denoiseProcessorMode = DenoiseMode::Off;
   denoiseModelInput.clear();
   denoiseModelOutput.clear();
 }
@@ -664,7 +753,7 @@ void AudioThread::processAudioInput(const AudioThreadInputPtr& input) {
     return;
   }
 
-  if (!denoiseEnabled.load() || input->channels != 1) {
+  if (!isDenoiseEnabled(denoiseMode.load()) || input->channels != 1) {
     queuePlaybackInput(input);
     return;
   }
@@ -675,7 +764,8 @@ void AudioThread::processAudioInput(const AudioThreadInputPtr& input) {
   }
 
   std::lock_guard<std::mutex> lock(denoiseMutex);
-  if (!denoiseEnabled.load()) {
+  const DenoiseMode requestedMode = denoiseMode.load();
+  if (!isDenoiseEnabled(requestedMode)) {
     queuePlaybackInput(input);
     return;
   }
@@ -689,7 +779,8 @@ void AudioThread::processAudioInput(const AudioThreadInputPtr& input) {
   if (denoiseProcessorSampleRate != input->sampleRate) {
     resetDenoiseProcessorLocked();
     denoiseProcessorSampleRate = input->sampleRate;
-    denoiseState = rnnoise_create(nullptr);
+    denoiseProcessorMode = requestedMode;
+    denoiseState = createDenoiseState(requestedMode);
     if (input->sampleRate != 48000) {
       constexpr float stopBandAttenuation = 60.0f;
       denoiseInputResampler = msresamp_rrrf_create(48000.0f / input->sampleRate, stopBandAttenuation);
@@ -744,7 +835,13 @@ void AudioThread::processAudioInput(const AudioThreadInputPtr& input) {
   for (size_t i = 0; i < modelInputSize; i++) {
     denoiseFrame[denoiseFrameFill++] = modelInput[i] * 32767.0f;
     if (denoiseFrameFill == RNNOISE_FRAME_SIZE) {
-      rnnoise_process_frame(denoiseState, denoiseFrame.data(), denoiseFrame.data());
+      if (denoiseProcessorMode == DenoiseMode::Mid) {
+        rnnoise_legacy_process_frame(static_cast<RNNoiseLegacyState*>(denoiseState),
+                                     denoiseFrame.data(), denoiseFrame.data());
+      } else {
+        rnnoise_process_frame(static_cast<DenoiseState*>(denoiseState),
+                              denoiseFrame.data(), denoiseFrame.data());
+      }
       for (float denoisedSample : denoiseFrame) {
         modelOutput->push_back(denoisedSample / 32767.0f);
       }

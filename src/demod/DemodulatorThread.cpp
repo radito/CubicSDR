@@ -29,7 +29,7 @@ DemodulatorThread::DemodulatorThread(DemodulatorInstance* parent)
       demodInstance(parent),
       outputBuffers("DemodulatorThreadBuffers"),
       muted(false),
-      denoise(wxGetApp().getDenoiseMode()),
+      denoise(isDenoiseEnabled(wxGetApp().getDenoiseMode())),
       squelchLevel(-100),
       signalLevel(-100),
       signalFloor(-30),

@@ -37,6 +37,18 @@ add_executable(CubicSDRTests
     ${PROJECT_SOURCE_DIR}/external/tinyxml/tinyxmlerror.cpp
 )
 
+if(USE_RNNOISE)
+    target_sources(CubicSDRTests PRIVATE
+        RNNoiseTests.cpp
+        ${RNNOISE_SOURCES}
+        $<TARGET_OBJECTS:CubicSDRRNNoiseLegacy>
+    )
+    target_compile_definitions(CubicSDRTests PRIVATE
+        USE_WEIGHTS_FILE=1
+        CUBICSDR_RNNOISE_TEST_MODEL="${CUBICSDR_RNNOISE_MODEL}"
+    )
+endif()
+
 if(ENABLE_DIGITAL_LAB)
     target_sources(CubicSDRTests PRIVATE
         DigitalModemTests.cpp
@@ -68,6 +80,8 @@ target_include_directories(CubicSDRTests PRIVATE
     ${PROJECT_SOURCE_DIR}/src/process
     ${PROJECT_SOURCE_DIR}/src/util
     ${PROJECT_SOURCE_DIR}/external/rnnoise/include
+    ${PROJECT_SOURCE_DIR}/external/rnnoise/src
+    ${PROJECT_SOURCE_DIR}/external/rnnoise-model
     ${PROJECT_SOURCE_DIR}/external/rtaudio
     ${PROJECT_SOURCE_DIR}/external/tinyxml
 )

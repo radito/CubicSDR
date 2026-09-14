@@ -598,32 +598,97 @@ IF (USE_HAMLIB)
 ENDIF()
 
 IF (USE_RNNOISE)
+    SET (CUBICSDR_RNNOISE_MODEL
+        ${PROJECT_SOURCE_DIR}/external/rnnoise-model/rnnoise-model.bin
+    )
+
+    SET (RNNOISE_LEGACY_SOURCES
+        ${PROJECT_SOURCE_DIR}/external/rnnoise-legacy/src/denoise.c
+        ${PROJECT_SOURCE_DIR}/external/rnnoise-legacy/src/rnn.c
+        ${PROJECT_SOURCE_DIR}/external/rnnoise-legacy/src/rnn_data.c
+        ${PROJECT_SOURCE_DIR}/external/rnnoise-legacy/src/rnn_reader.c
+        ${PROJECT_SOURCE_DIR}/external/rnnoise-legacy/src/pitch.c
+        ${PROJECT_SOURCE_DIR}/external/rnnoise-legacy/src/kiss_fft.c
+        ${PROJECT_SOURCE_DIR}/external/rnnoise-legacy/src/celt_lpc.c
+    )
+
+    ADD_LIBRARY(CubicSDRRNNoiseLegacy OBJECT ${RNNOISE_LEGACY_SOURCES})
+    TARGET_INCLUDE_DIRECTORIES(CubicSDRRNNoiseLegacy PRIVATE
+        ${PROJECT_SOURCE_DIR}/external/rnnoise-legacy/include
+        ${PROJECT_SOURCE_DIR}/external/rnnoise-legacy/src
+    )
+    TARGET_COMPILE_DEFINITIONS(CubicSDRRNNoiseLegacy PRIVATE
+        compute_rnn=rnnoise_legacy_compute_rnn
+        rnn_autocorr=rnnoise_legacy_autocorr
+        rnn_fft_alloc=rnnoise_legacy_fft_alloc
+        rnn_fft_alloc_arch_c=rnnoise_legacy_fft_alloc_arch_c
+        rnn_fft_alloc_twiddles=rnnoise_legacy_fft_alloc_twiddles
+        rnn_fft_c=rnnoise_legacy_fft_c
+        rnn_fft_free=rnnoise_legacy_fft_free
+        rnn_fft_free_arch_c=rnnoise_legacy_fft_free_arch_c
+        rnn_fft_impl=rnnoise_legacy_fft_impl
+        rnn_ifft_c=rnnoise_legacy_ifft_c
+        rnn_lpc=rnnoise_legacy_lpc
+        rnn_pitch_downsample=rnnoise_legacy_pitch_downsample
+        rnn_pitch_search=rnnoise_legacy_pitch_search
+        rnn_pitch_xcorr=rnnoise_legacy_pitch_xcorr
+        rnn_remove_doubling=rnnoise_legacy_remove_doubling
+        rnnoise_create=rnnoise_legacy_create
+        rnnoise_destroy=rnnoise_legacy_destroy
+        rnnoise_get_frame_size=rnnoise_legacy_get_frame_size
+        rnnoise_get_size=rnnoise_legacy_get_size
+        rnnoise_init=rnnoise_legacy_init
+        rnnoise_model_free=rnnoise_legacy_model_free
+        rnnoise_model_from_file=rnnoise_legacy_model_from_file
+        rnnoise_model_orig=rnnoise_legacy_model_orig
+        rnnoise_process_frame=rnnoise_legacy_process_frame
+    )
+
     SET (cubicsdr_headers
         ${cubicsdr_headers}
         external/rnnoise/src/arch.h
-		external/rnnoise/src/celt_lpc.h
-		external/rnnoise/src/common.h
-		external/rnnoise/src/_kiss_fft_guts.h
-		external/rnnoise/src/kiss_fft.h
-		external/rnnoise/src/opus_types.h
-		external/rnnoise/src/pitch.h
-		external/rnnoise/src/rnn_data.h
-		external/rnnoise/src/rnn.h
-		external/rnnoise/src/tansig_table.h
+        external/rnnoise/src/celt_lpc.h
+        external/rnnoise/src/common.h
+        external/rnnoise/src/cpu_support.h
+        external/rnnoise/src/denoise.h
+        external/rnnoise/src/_kiss_fft_guts.h
+        external/rnnoise/src/kiss_fft.h
+        external/rnnoise/src/nnet.h
+        external/rnnoise/src/nnet_arch.h
+        external/rnnoise/src/opus_types.h
+        external/rnnoise/src/pitch.h
+        external/rnnoise/src/rnn.h
+        external/rnnoise/src/vec.h
+        external/rnnoise/src/vec_avx.h
+        external/rnnoise/src/vec_neon.h
+        external/rnnoise-model/rnnoise_data.h
+    )
+
+    SET (RNNOISE_SOURCES
+        ${PROJECT_SOURCE_DIR}/external/rnnoise/src/denoise.c
+        ${PROJECT_SOURCE_DIR}/external/rnnoise/src/rnn.c
+        ${PROJECT_SOURCE_DIR}/external/rnnoise/src/pitch.c
+        ${PROJECT_SOURCE_DIR}/external/rnnoise/src/kiss_fft.c
+        ${PROJECT_SOURCE_DIR}/external/rnnoise/src/celt_lpc.c
+        ${PROJECT_SOURCE_DIR}/external/rnnoise/src/nnet.c
+        ${PROJECT_SOURCE_DIR}/external/rnnoise/src/nnet_default.c
+        ${PROJECT_SOURCE_DIR}/external/rnnoise/src/parse_lpcnet_weights.c
+        ${PROJECT_SOURCE_DIR}/external/rnnoise/src/rnnoise_tables.c
+        ${PROJECT_SOURCE_DIR}/external/rnnoise-model/rnnoise_data.c
     )
 
     SET (cubicsdr_sources
         ${cubicsdr_sources}
-        external/rnnoise/src/denoise.c
-        external/rnnoise/src/rnn.c
-        external/rnnoise/src/rnn_data.c
-        external/rnnoise/src/rnn_reader.c
-        external/rnnoise/src/pitch.c
-        external/rnnoise/src/kiss_fft.c
-        external/rnnoise/src/celt_lpc.c
+        ${RNNOISE_SOURCES}
+        $<TARGET_OBJECTS:CubicSDRRNNoiseLegacy>
     )
-    
-    include_directories(${PROJECT_SOURCE_DIR}/external/rnnoise/include)
+    SET_SOURCE_FILES_PROPERTIES(${RNNOISE_SOURCES} PROPERTIES COMPILE_DEFINITIONS USE_WEIGHTS_FILE=1)
+
+    include_directories(
+        ${PROJECT_SOURCE_DIR}/external/rnnoise/include
+        ${PROJECT_SOURCE_DIR}/external/rnnoise/src
+        ${PROJECT_SOURCE_DIR}/external/rnnoise-model
+    )
 ENDIF()
 
 SET (CUBICSDR_FONTS 
@@ -722,6 +787,10 @@ IF (NOT BUNDLE_APP)
     configure_files(${PROJECT_SOURCE_DIR}/font ${CMAKE_BINARY_DIR}/${EX_PLATFORM_NAME}/fonts "*.fnt")
     configure_files(${PROJECT_SOURCE_DIR}/font ${CMAKE_BINARY_DIR}/${EX_PLATFORM_NAME}/fonts "*.png")
     configure_files(${PROJECT_SOURCE_DIR}/icon ${CMAKE_BINARY_DIR}/${EX_PLATFORM_NAME} CubicSDR.ico)
+    IF(USE_RNNOISE)
+        CONFIGURE_FILE(${CUBICSDR_RNNOISE_MODEL}
+            ${CMAKE_BINARY_DIR}/${EX_PLATFORM_NAME}/rnnoise-model.bin COPYONLY)
+    ENDIF()
     IF(MSVC)
         configure_files(${PROJECT_SOURCE_DIR}/external/liquid-dsp/msvc/${EX_PLATFORM}/ ${CMAKE_BINARY_DIR}/${EX_PLATFORM_NAME} "*.dll")
 		configure_files(${PROJECT_SOURCE_DIR}/external/msvc/${EX_PLATFORM_NAME}/ ${CMAKE_BINARY_DIR}/${EX_PLATFORM_NAME} "*.dll")
@@ -801,6 +870,7 @@ IF (APPLE AND BUNDLE_APP)
         ${cubicsdr_sources}
         ${cubicsdr_headers} 
         ${CUBICSDR_FONTS}
+        ${CUBICSDR_RNNOISE_MODEL}
         ${PROJECT_SOURCE_DIR}/icon/CubicSDR.icns
     ) 
     
@@ -815,6 +885,14 @@ IF (APPLE AND BUNDLE_APP)
         PROPERTIES
         MACOSX_PACKAGE_LOCATION Resources/fonts
     )
+
+    IF(USE_RNNOISE)
+        SET_SOURCE_FILES_PROPERTIES(
+            ${CUBICSDR_RNNOISE_MODEL}
+            PROPERTIES
+            MACOSX_PACKAGE_LOCATION Resources
+        )
+    ENDIF()
 
     target_link_libraries(CubicSDR ${LIQUID_LIB} ${wxWidgets_LIBRARIES} ${OPENGL_LIBRARIES} ${OTHER_LIBRARIES})
     SET_TARGET_PROPERTIES(CubicSDR PROPERTIES

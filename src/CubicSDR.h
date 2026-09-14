@@ -19,6 +19,7 @@
 #include "AudioThread.h"
 #include "DemodulatorMgr.h"
 #include "AppConfig.h"
+#include "audio/DenoiseMode.h"
 #include "AppFrame.h"
 #include "FrequencyDialog.h"
 #include "DemodLabelDialog.h"
@@ -166,8 +167,8 @@ public:
     void setAGCMode(bool mode);
     bool getAGCMode();
 
-    void setDenoiseMode(bool mode);
-    bool getDenoiseMode();
+    void setDenoiseMode(DenoiseMode mode);
+    DenoiseMode getDenoiseMode();
 
     void setGain(const std::string& name, float gain_in);
     float getGain(const std::string& name);
@@ -214,7 +215,7 @@ private:
     std::atomic_llong sampleRate;
     std::string antennaName;
     std::atomic_bool agcMode;
-    std::atomic_bool denoiseMode;
+    std::atomic<DenoiseMode> denoiseMode;
     std::atomic_bool shuttingDown;
 
     SDRThread *sdrThread = nullptr;
