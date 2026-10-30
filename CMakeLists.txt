@@ -347,6 +347,7 @@ SET (cubicsdr_sources
     src/demod/DemodulatorInstance.cpp
     src/demod/DemodulatorMgr.cpp
     src/dsp/RDSDecoder.cpp
+    src/dsp/SquelchProcessor.cpp
     src/modules/modem/Modem.cpp
     src/modules/modem/ModemAnalog.cpp
     src/modules/modem/ModemDigital.cpp
@@ -478,6 +479,7 @@ SET (cubicsdr_headers
     src/audio/AudioFileWAV.h
     src/dsp/SampleFrameAccumulator.h
     src/dsp/RDSDecoder.h
+    src/dsp/SquelchProcessor.h
     src/util/Gradient.h
     src/util/Timer.h
 	src/util/ThreadBlockingQueue.h

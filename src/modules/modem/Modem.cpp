@@ -39,6 +39,10 @@ bool Modem::takeStatus(std::string& /* status */) {
     return false;
 }
 
+bool Modem::getSquelchQuality(float& /* quality */) const {
+    return false;
+}
+
 void Modem::addModemFactory(ModemFactoryFn factoryFunc, std::string modemName, int defaultRate) {
     modemFactories[modemName] = factoryFunc;
     modemDefaultRates[modemName] = defaultRate;

@@ -154,6 +154,7 @@ public:
     
     virtual void demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput *audioOut) = 0;
     virtual bool takeStatus(std::string& status);
+    virtual bool getSquelchQuality(float& quality) const;
     
     bool shouldRebuildKit();
     void rebuildKit();

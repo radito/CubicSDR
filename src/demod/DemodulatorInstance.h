@@ -69,6 +69,8 @@ public:
     void squelchAuto();
     bool isSquelchEnabled();
     void setSquelchEnabled(bool state);
+    bool isSquelchQualityEnabled();
+    void setSquelchQualityEnabled(bool state);
 
     float getSignalLevel();
     float getSignalFloor();

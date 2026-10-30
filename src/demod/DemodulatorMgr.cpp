@@ -22,6 +22,7 @@ DemodulatorMgr::DemodulatorMgr() {
     lastBandwidth = DEFAULT_DEMOD_BW;
     lastDemodType = DEFAULT_DEMOD_TYPE;
     lastSquelchEnabled = false;
+    lastSquelchQualityEnabled = true;
     lastSquelch = -100;
     lastGain = 1.0;
     lastMuted = false;
@@ -329,6 +330,7 @@ void DemodulatorMgr::updateLastState() {
         lastDemodType = currentModem->getDemodulatorType();
         lastDemodLock = currentModem->getDemodulatorLock() != 0;
         lastSquelchEnabled = currentModem->isSquelchEnabled();
+        lastSquelchQualityEnabled = currentModem->isSquelchQualityEnabled();
         lastSquelch = currentModem->getSquelchLevel();
         lastGain = currentModem->getGain();
         lastModemSettings[lastDemodType] = currentModem->readModemSettings();
@@ -390,6 +392,14 @@ void DemodulatorMgr::setLastSquelchEnabled(bool lastSquelchEnabled_in) {
     lastSquelchEnabled = lastSquelchEnabled_in;
 }
 
+bool DemodulatorMgr::isLastSquelchQualityEnabled() const {
+    return lastSquelchQualityEnabled;
+}
+
+void DemodulatorMgr::setLastSquelchQualityEnabled(bool enabled) {
+    lastSquelchQualityEnabled = enabled;
+}
+
 bool DemodulatorMgr::isLastMuted() const {
     return lastMuted;
 }
@@ -424,6 +434,7 @@ void DemodulatorMgr::saveInstance(DataNode *node, const DemodulatorInstancePtr& 
     
     *node->newChild("squelch_level") = inst->getSquelchLevel();
     *node->newChild("squelch_enabled") = inst->isSquelchEnabled() ? 1 : 0;
+    *node->newChild("squelch_quality_enabled") = inst->isSquelchQualityEnabled() ? 1 : 0;
     *node->newChild("output_device") = outputDevices[inst->getOutputDevice()].name;
     *node->newChild("gain") = inst->getGain();
     *node->newChild("muted") = inst->isMuted() ? 1 : 0;
@@ -486,6 +497,8 @@ DemodulatorInstancePtr DemodulatorMgr::loadInstance(DataNode *node) {
     long long freq = (long long)*node->getNext("frequency");
     float squelch_level = node->hasAnother("squelch_level") ? (float) *node->getNext("squelch_level") : 0;
     int squelch_enabled = node->hasAnother("squelch_enabled") ? (int) *node->getNext("squelch_enabled") : 0;
+    int squelch_quality_enabled = node->hasAnother("squelch_quality_enabled")
+        ? (int) *node->getNext("squelch_quality_enabled") : 1;
     int muted = node->hasAnother("muted") ? (int) *node->getNext("muted") : 0;
     int delta_locked = node->hasAnother("delta_lock") ? (int) *node->getNext("delta_lock") : 0;
     int delta_ofs = node->hasAnother("delta_ofs") ? (int) *node->getNext("delta_ofs") : 0;
@@ -565,6 +578,7 @@ DemodulatorInstancePtr DemodulatorMgr::loadInstance(DataNode *node) {
         newDemod->setSquelchEnabled(true);
         newDemod->setSquelchLevel(squelch_level);
     }
+    newDemod->setSquelchQualityEnabled(squelch_quality_enabled != 0);
     
 	//Attach to sound output:
     std::map<int, RtAudio::DeviceInfo>::iterator i;
@@ -585,4 +599,3 @@ DemodulatorInstancePtr DemodulatorMgr::loadInstance(DataNode *node) {
     
     return newDemod;
 }
-

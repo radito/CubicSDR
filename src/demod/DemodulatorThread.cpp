@@ -36,6 +36,7 @@ DemodulatorThread::DemodulatorThread(DemodulatorInstance* parent)
       signalCeil(30),
       squelchEnabled(false),
       squelchBreak(false),
+      squelchQualityEnabled(true),
       lastSquelchTime(0) {}
 
 DemodulatorThread::~DemodulatorThread() {
@@ -96,6 +97,7 @@ void DemodulatorThread::run() {
   audioOutputQueue = std::static_pointer_cast<AudioThreadInputQueue>(getOutputQueue("AudioDataOutput"));
 
   ModemIQData modemData;
+  std::vector<float> squelchProcessedAudio;
 
   while (!stopping) {
     DemodulatorThreadPostIQDataPtr inp;
@@ -171,6 +173,12 @@ void DemodulatorThread::run() {
     double sampleTime = inp->sampleRate > 0
         ? double(inp->data.size()) / double(inp->sampleRate)
         : 0.0;
+    const float squelchSignalLevel = squelchDetector.update(
+        static_cast<float>(currentSignalLevel), sampleTime,
+        inp->discontinuity || inp->retuned);
+    float modemSquelchQuality = 1.0f;
+    const bool hasModemSquelchQuality = squelchQualityEnabled.load() &&
+        cModem->getSquelchQuality(modemSquelchQuality);
 
     {
 
@@ -208,11 +216,12 @@ void DemodulatorThread::run() {
     const std::int64_t currEpoch = getEpochMs();
     bool squelched = false;
 
-    if (squelchEnabled) {
+    const bool squelchIsEnabled = squelchEnabled.load();
+    if (squelchIsEnabled) {
       const float closeLevel = squelchLevel.load();
-      const float openLevel = closeLevel + 2.0f;
 
-      if (!squelchBreak && currentSignalLevel >= openLevel) {
+      if (!squelchBreak && SquelchDetector::shouldOpen(
+              squelchSignalLevel, closeLevel, hasModemSquelchQuality, modemSquelchQuality)) {
         lastSquelchTime = currEpoch;
 
         if (wxGetApp().getSoloMode() && !wxGetApp().getAppFrame()->isUserDemodBusy()) {
@@ -231,15 +240,34 @@ void DemodulatorThread::run() {
       }
 
       if (squelchBreak) {
-        if (currentSignalLevel >= closeLevel) {
+        const std::int64_t closeHangMilliseconds = SquelchDetector::closeHangMilliseconds(
+            squelchSignalLevel, closeLevel, hasModemSquelchQuality, modemSquelchQuality);
+        if (closeHangMilliseconds == 0) {
           lastSquelchTime = currEpoch;
-        } else if (currEpoch - lastSquelchTime.load() > 500) {
+        } else if (currEpoch - lastSquelchTime.load() > closeHangMilliseconds) {
           releaseSquelchLock(demodInstance);
           squelchBreak = false;
         }
       }
 
       squelched = !squelchBreak;
+    }
+
+    AudioThreadInputPtr playbackInput = ati;
+    if (ati) {
+      const SquelchAudioResult gateResult = squelchAudioGate.process(
+          ati->data, ati->sampleRate, ati->channels, squelchIsEnabled,
+          !squelched, inp->discontinuity || inp->retuned,
+          squelchProcessedAudio);
+      if (gateResult == SquelchAudioResult::Suppress) {
+        playbackInput = nullptr;
+      } else if (gateResult == SquelchAudioResult::Processed) {
+        playbackInput = std::make_shared<AudioThreadInput>(ati.get());
+        playbackInput->data.swap(squelchProcessedAudio);
+        playbackInput->is_squelch_active = false;
+        playbackInput->is_denoised = denoise;
+        playbackInput->discontinuity = inp->discontinuity;
+      }
     }
 
     // compute audio peak:
@@ -250,6 +278,12 @@ void DemodulatorThread::run() {
         float p = fabs(data_i);
         if (p > ati->peak) {
           ati->peak = p;
+        }
+      }
+      if (playbackInput && playbackInput != ati) {
+        playbackInput->peak = 0;
+        for (float sample : playbackInput->data) {
+          playbackInput->peak = std::max(playbackInput->peak, std::fabs(sample));
         }
       }
     }
@@ -342,11 +376,11 @@ void DemodulatorThread::run() {
       }
     }
 
-    if (!squelched && ati != nullptr) {
+    if (playbackInput != nullptr) {
       if (!muted && (!wxGetApp().getSoloMode() || (demodInstance == wxGetApp().getDemodMgr().getCurrentModem().get()))) {
-        ati->discontinuity = ati->discontinuity || pendingAudioDiscontinuity;
+        playbackInput->discontinuity = playbackInput->discontinuity || pendingAudioDiscontinuity;
         // non-blocking push needed for audio out
-        if (!audioOutputQueue->try_push(ati)) {
+        if (!audioOutputQueue->try_push(playbackInput)) {
           pendingAudioDiscontinuity = true;
           std::cout << "DemodulatorThread::run() cannot push ati into "
                        "audioOutputQueue, is full !"
@@ -434,6 +468,14 @@ void DemodulatorThread::setSquelchEnabled(bool squelchEnabled_in) {
 
 bool DemodulatorThread::isSquelchEnabled() {
   return squelchEnabled;
+}
+
+void DemodulatorThread::setSquelchQualityEnabled(bool enabled) {
+  squelchQualityEnabled = enabled;
+}
+
+bool DemodulatorThread::isSquelchQualityEnabled() {
+  return squelchQualityEnabled;
 }
 
 void DemodulatorThread::setSquelchLevel(float signal_level_in) {

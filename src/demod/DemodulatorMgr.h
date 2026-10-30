@@ -63,6 +63,8 @@ public:
 
     bool isLastSquelchEnabled() const;
     void setLastSquelchEnabled(bool lastSquelchEnabled_in);
+    bool isLastSquelchQualityEnabled() const;
+    void setLastSquelchQualityEnabled(bool enabled);
     
     bool isLastMuted() const;
     void setLastMuted(bool lastMuted_in);
@@ -95,6 +97,7 @@ private:
     std::string lastDemodType;
     bool lastDemodLock;
     bool lastSquelchEnabled;
+    bool lastSquelchQualityEnabled;
     float lastSquelch;
     float lastGain;
     bool lastMuted;

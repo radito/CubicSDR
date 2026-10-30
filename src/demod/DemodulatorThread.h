@@ -11,6 +11,7 @@
 #include "AudioThread.h"
 #include "DemodDefs.h"
 #include "Modem.h"
+#include "dsp/SquelchProcessor.h"
 #include "SpinMutex.h"
 
 #define DEMOD_VIS_SIZE 2048
@@ -39,6 +40,8 @@ class DemodulatorThread : public IOThread {
   float getSignalCeil();
   void setSquelchEnabled(bool squelchEnabled_in);
   bool isSquelchEnabled();
+  void setSquelchQualityEnabled(bool enabled);
+  bool isSquelchQualityEnabled();
   float getSignalFloor();
   void setSquelchLevel(float signal_level_in);
   float getSquelchLevel();
@@ -61,9 +64,11 @@ class DemodulatorThread : public IOThread {
 
   std::atomic<float> squelchLevel;
   std::atomic<float> signalLevel, signalFloor, signalCeil;
-  std::atomic<bool> squelchEnabled, squelchBreak;
+  std::atomic<bool> squelchEnabled, squelchBreak, squelchQualityEnabled;
 
   std::atomic<std::int64_t> lastSquelchTime;
+  SquelchDetector squelchDetector;
+  SquelchAudioGate squelchAudioGate;
 
   static DemodulatorInstance* squelchLock;
   static std::mutex squelchLockMutex;

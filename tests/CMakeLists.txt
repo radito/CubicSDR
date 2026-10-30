@@ -7,6 +7,7 @@ add_executable(CubicSDRTests
     ModemIQTests.cpp
     RDSDecoderTests.cpp
     SampleFrameAccumulatorTests.cpp
+    SquelchProcessorTests.cpp
     SDRDataTests.cpp
     SpectrumVisualProcessorTests.cpp
     ThreadBlockingQueueTests.cpp
@@ -14,6 +15,7 @@ add_executable(CubicSDRTests
     ${PROJECT_SOURCE_DIR}/src/IOThread.cpp
     ${PROJECT_SOURCE_DIR}/src/audio/AudioMixer.cpp
     ${PROJECT_SOURCE_DIR}/src/dsp/RDSDecoder.cpp
+    ${PROJECT_SOURCE_DIR}/src/dsp/SquelchProcessor.cpp
     ${PROJECT_SOURCE_DIR}/src/modules/modem/Modem.cpp
     ${PROJECT_SOURCE_DIR}/src/modules/modem/ModemAnalog.cpp
     ${PROJECT_SOURCE_DIR}/src/modules/modem/analog/ModemAM.cpp

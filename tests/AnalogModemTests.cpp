@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 
 CUBIC_TEST(analog_factories_expose_valid_defaults_and_ignore_unknown_settings) {
@@ -234,6 +235,49 @@ CUBIC_TEST(fm_demod_audio_reaches_the_playback_ring_after_a_stream_reset) {
 
 CUBIC_TEST(nbfm_modem_demodulates_finite_mono_audio) {
     exerciseMonoModem<ModemNBFM>(12'500);
+}
+
+CUBIC_TEST(nbfm_exposes_discriminator_noise_quality) {
+    constexpr int sampleRate = 12500;
+    ModemNBFM cleanModem;
+    ModemNBFM noisyModem;
+    std::unique_ptr<ModemKit, KitDeleter> cleanKit(
+        cleanModem.buildKit(sampleRate, 48000), KitDeleter{&cleanModem});
+    std::unique_ptr<ModemKit, KitDeleter> noisyKit(
+        noisyModem.buildKit(sampleRate, 48000), KitDeleter{&noisyModem});
+    ModemIQData cleanInput;
+    ModemIQData noisyInput;
+    cleanInput.sampleRate = noisyInput.sampleRate = sampleRate;
+    cleanInput.discontinuity = noisyInput.discontinuity = true;
+    cleanInput.data.resize(4096);
+    noisyInput.data.resize(4096);
+
+    double phase = 0.0;
+    std::uint32_t randomState = 1;
+    for (std::size_t i = 0; i < cleanInput.data.size(); ++i) {
+        const double modulation = 350.0 * std::sin(2.0 * M_PI * 1000.0 * i / sampleRate);
+        phase += 2.0 * M_PI * modulation / sampleRate;
+        cleanInput.data[i].real = static_cast<float>(std::cos(phase));
+        cleanInput.data[i].imag = static_cast<float>(std::sin(phase));
+
+        randomState = randomState * 1664525u + 1013904223u;
+        const double randomPhase = 2.0 * M_PI * static_cast<double>(randomState) /
+                                   4294967295.0;
+        noisyInput.data[i].real = static_cast<float>(std::cos(randomPhase));
+        noisyInput.data[i].imag = static_cast<float>(std::sin(randomPhase));
+    }
+
+    AudioThreadInput cleanAudio;
+    AudioThreadInput noisyAudio;
+    cleanModem.demodulate(cleanKit.get(), &cleanInput, &cleanAudio);
+    noisyModem.demodulate(noisyKit.get(), &noisyInput, &noisyAudio);
+
+    float cleanQuality = 0.0f;
+    float noisyQuality = 1.0f;
+    CUBIC_REQUIRE(cleanModem.getSquelchQuality(cleanQuality));
+    CUBIC_REQUIRE(noisyModem.getSquelchQuality(noisyQuality));
+    CUBIC_REQUIRE(cleanQuality > 0.70f);
+    CUBIC_REQUIRE(noisyQuality < 0.20f);
 }
 
 CUBIC_TEST(lsb_modem_demodulates_finite_mono_audio) {

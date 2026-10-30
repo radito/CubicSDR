@@ -99,7 +99,7 @@ private:
     WaterfallCanvas *waterfallCanvas, *demodWaterfallCanvas;
     TuningCanvas *demodTuner;
     MeterCanvas *demodSignalMeter, *demodGainMeter, *spectrumAvgMeter, *waterfallSpeedMeter;
-    ModeSelectorCanvas *demodModeSelector, *demodMuteButton, *peakHoldButton, *spectrum3DButton, *soloModeButton, *deltaLockButton;
+    ModeSelectorCanvas *demodModeSelector, *demodMuteButton, *peakHoldButton, *spectrum3DButton, *soloModeButton, *deltaLockButton, *squelchQualityButton;
     GainCanvas *gainCanvas;
     BookmarkView *bookmarkView;
 
@@ -212,6 +212,7 @@ private:
 	WaterfallCanvas *makeWaterfallCanvas(wxWindow *parent, const wxGLAttributes &attribList);
 	SpectrumCanvas *makeDemodSpectrumCanvas(wxWindow *parent, const wxGLAttributes &attribList);
 	MeterCanvas *makeSignalMeter(wxWindow *parent, const wxGLAttributes &attribList);
+	ModeSelectorCanvas *makeSquelchQualityButton(wxWindow *parent, const wxGLAttributes &attribList);
 	ModeSelectorCanvas *makeDeltaLockButton(wxWindow *parent, const wxGLAttributes &attribList);
 	TuningCanvas *makeModemTuner(wxWindow *parent, const wxGLAttributes &attribList);
 	MeterCanvas *makeModemGainMeter(wxWindow *parent, const wxGLAttributes &attribList);
@@ -280,6 +281,7 @@ private:
     void handleDemodWaterfallSpectrum();
     void handleSpectrumWaterfall();
     void handleMuteButton();
+    void handleSquelchQualityButton();
     void handleScopeProcessor();
     void handleScopeSpectrumProcessors();
     void handleModemProperties();

@@ -92,6 +92,10 @@ void ModemNBFM::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput *
     
     freqdem_demodulate_block(demodFM, &input->data[0], (unsigned int)bufSize, &demodOutputData[0]);
 
+    squelchQualityValid = fmkit->noiseDetector.process(
+        demodOutputData, static_cast<int>(input->sampleRate),
+        input->discontinuity || input->retuned, squelchQuality);
+
     if (fmkit->deemphasis) {
         for (size_t i = 0; i < bufSize; ++i) {
             iirfilt_rrrf_execute(fmkit->deemphasis, demodOutputData[i], &demodOutputData[i]);
@@ -99,4 +103,10 @@ void ModemNBFM::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput *
     }
 
     buildAudioOutput(fmkit, audioOut, false);
+}
+
+bool ModemNBFM::getSquelchQuality(float& quality) const {
+    if (!squelchQualityValid) return false;
+    quality = squelchQuality;
+    return true;
 }

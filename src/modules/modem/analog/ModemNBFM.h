@@ -4,10 +4,12 @@
 #pragma once
 #include "Modem.h"
 #include "ModemAnalog.h"
+#include "dsp/SquelchProcessor.h"
 
 class ModemKitNBFM : public ModemKitAnalog {
 public:
     iirfilt_rrrf deemphasis = nullptr;
+    NBFMNoiseDetector noiseDetector;
 };
 
 class ModemNBFM : public ModemAnalog {
@@ -27,8 +29,11 @@ public:
     void disposeKit(ModemKit *kit) override;
 
     void demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput *audioOut) override;
+    bool getSquelchQuality(float& quality) const override;
 
 private:
     freqdem demodFM;
     int demph;
+    float squelchQuality = 0.0f;
+    bool squelchQualityValid = false;
 };

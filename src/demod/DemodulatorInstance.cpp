@@ -317,6 +317,14 @@ void DemodulatorInstance::setSquelchEnabled(bool state) {
     demodulatorThread->setSquelchEnabled(state);
 }
 
+bool DemodulatorInstance::isSquelchQualityEnabled() {
+    return demodulatorThread->isSquelchQualityEnabled();
+}
+
+void DemodulatorInstance::setSquelchQualityEnabled(bool state) {
+    demodulatorThread->setSquelchQualityEnabled(state);
+}
+
 float DemodulatorInstance::getSignalLevel() {
     return demodulatorThread->getSignalLevel();
 }

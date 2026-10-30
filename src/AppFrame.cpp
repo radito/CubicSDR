@@ -174,8 +174,13 @@ AppFrame::AppFrame() :
 #endif
 
     // Demod Signal/Squelch Meter
+    auto *demodSignalTray = new wxBoxSizer(wxVERTICAL);
     demodSignalMeter = makeSignalMeter(demodPanel, attribList);
-    demodTray->Add(demodSignalMeter, 1, wxEXPAND | wxALL, 0);
+    demodSignalTray->Add(demodSignalMeter, 8, wxEXPAND | wxALL, 0);
+    demodSignalTray->AddSpacer(1);
+    squelchQualityButton = makeSquelchQualityButton(demodPanel, attribList);
+    demodSignalTray->Add(squelchQualityButton, 1, wxEXPAND | wxALL, 0);
+    demodTray->Add(demodSignalTray, 1, wxEXPAND | wxALL, 0);
     demodTray->AddSpacer(1);
 
 #if CUBICSDR_ENABLE_VIEW_SCOPE
@@ -783,6 +788,18 @@ ModeSelectorCanvas * AppFrame::makeDeltaLockButton(wxWindow *parent, const wxGLA
     pCanvas->setToggleMode(true);
     pCanvas->setSelection(-1);
     pCanvas->SetMinSize(wxSize(20, 28));
+    return pCanvas;
+}
+
+ModeSelectorCanvas *AppFrame::makeSquelchQualityButton(wxWindow *parent, const wxGLAttributes &attribList) {
+    auto *pCanvas = new ModeSelectorCanvas(parent, attribList);
+    pCanvas->addChoice(1, "Q");
+    pCanvas->setPadding(-1, -1);
+    pCanvas->setHighlightColor(RGBA4f(0.2f, 0.65f, 1.0f));
+    pCanvas->setHelpTip("NBFM discriminator quality squelch (Q). Disable for level-only squelch.");
+    pCanvas->setToggleMode(true);
+    pCanvas->setSelection(1);
+    pCanvas->SetMinSize(wxSize(12, 28));
     return pCanvas;
 }
 
@@ -1423,6 +1440,8 @@ bool AppFrame::actionOnMenuReset(wxCommandEvent& event) {
         wxGetApp().getDemodMgr().setLastBandwidth(DEFAULT_DEMOD_BW);
         wxGetApp().getDemodMgr().setLastGain(1.0);
         wxGetApp().getDemodMgr().setLastSquelchLevel(-100);
+        wxGetApp().getDemodMgr().setLastSquelchQualityEnabled(true);
+        squelchQualityButton->setSelection(1);
         waterfallCanvas->setBandwidth(wxGetApp().getSampleRate());
         waterfallCanvas->setCenterFrequency(wxGetApp().getFrequency());
         spectrumCanvas->setBandwidth(wxGetApp().getSampleRate());
@@ -2243,6 +2262,7 @@ void AppFrame::OnIdle(wxIdleEvent &event) {
         handleDemodWaterfallSpectrum();
         handleSpectrumWaterfall();
         handleMuteButton();
+        handleSquelchQualityButton();
     }
 
     handleScopeProcessor();
@@ -2427,6 +2447,13 @@ void AppFrame::handleMuteButton() {
     }
 }
 
+void AppFrame::handleSquelchQualityButton() {
+    if (!squelchQualityButton->modeChanged()) return;
+    wxGetApp().getDemodMgr().setLastSquelchQualityEnabled(
+        squelchQualityButton->getSelection() == 1);
+    squelchQualityButton->clearModeChanged();
+}
+
 void AppFrame::handleSpectrumWaterfall() {
     if (spectrumCanvas->getViewState() &&
         abs(wxGetApp().getFrequency() - spectrumCanvas->getCenterFrequency()) > (wxGetApp().getSampleRate() / 2)) {
@@ -2534,6 +2561,7 @@ void AppFrame::handleCurrentModem() {
 #endif
         deltaLockButton->setSelection(demod->isDeltaLock() ? 1 : -1);
         demodMuteButton->setSelection(demod->isMuted() ? 1 : -1);
+        squelchQualityButton->setSelection(demod->isSquelchQualityEnabled() ? 1 : -1);
         modemPropertiesUpdated.store(true);
         demodTuner->setHalfBand(dType == "USB" || dType == "LSB");
     }
@@ -2643,6 +2671,16 @@ void AppFrame::handleCurrentModem() {
                 soloModeButton->setSelection(wxGetApp().getSoloMode() ? 1 : -1);
                 soloModeButton->Refresh();
             }
+        }
+
+        const bool qualityMode = squelchQualityButton->getSelection() == 1;
+        if (squelchQualityButton->modeChanged()) {
+            demod->setSquelchQualityEnabled(qualityMode);
+            wxGetApp().getDemodMgr().setLastSquelchQualityEnabled(qualityMode);
+            squelchQualityButton->clearModeChanged();
+        } else if (demod->isSquelchQualityEnabled() != qualityMode) {
+            squelchQualityButton->setSelection(demod->isSquelchQualityEnabled() ? 1 : -1);
+            squelchQualityButton->Refresh();
         }
 
         if (demodWaterfallCanvas) {

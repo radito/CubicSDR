@@ -732,6 +732,7 @@ void WaterfallCanvas::OnMouseReleased(wxMouseEvent& event) {
                 demod->setBandwidth(mgr->getLastBandwidth());
                 demod->setSquelchLevel(mgr->getLastSquelchLevel());
                 demod->setSquelchEnabled(mgr->isLastSquelchEnabled());
+                demod->setSquelchQualityEnabled(mgr->isLastSquelchQualityEnabled());
                 demod->setGain(mgr->getLastGain());
                 demod->setMuted(mgr->isLastMuted());
                 if (mgr->getLastDeltaLock()) {
@@ -831,6 +832,7 @@ void WaterfallCanvas::OnMouseReleased(wxMouseEvent& event) {
             demod->setBandwidth(bw);
             demod->setSquelchLevel(mgr->getLastSquelchLevel());
             demod->setSquelchEnabled(mgr->isLastSquelchEnabled());
+            demod->setSquelchQualityEnabled(mgr->isLastSquelchQualityEnabled());
             demod->setGain(mgr->getLastGain());
             demod->setMuted(mgr->isLastMuted());
             if (mgr->getLastDeltaLock()) {
