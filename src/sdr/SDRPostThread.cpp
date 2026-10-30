@@ -158,7 +158,9 @@ SDRPostThreadChannelizerType SDRPostThread::getChannelizerType() {
 void SDRPostThread::run() {
 #ifdef __APPLE__
     if (__builtin_available(macOS 10.10, *)) {
-        pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
+        // Match the demod threads downstream: a lower class here starves
+        // them under UI load and turns into backlog and dropouts.
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
     }
 #endif
 
@@ -278,13 +280,6 @@ void SDRPostThread::runSingleCH(SDRThreadIQData *data_in) {
     }
     
     size_t outSize = data_in->data.size();
-    
-    if (outSize > dataOut.capacity()) {
-        dataOut.reserve(outSize);
-    }
-    if (outSize != dataOut.size()) {
-        dataOut.resize(outSize);
-    }
     
     DemodulatorThreadIQDataPtr demodDataOut = buffers.getBuffer();
 

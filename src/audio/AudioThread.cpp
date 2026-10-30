@@ -3,6 +3,7 @@
 
 #include "AudioThread.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <iostream>
@@ -246,33 +247,8 @@ static int audioCallback(void* outputBuffer, void* /* inputBuffer */, unsigned i
       src->releaseMixSource(sourceIndex);
       continue;
     }
-    if (!state->primed.load(std::memory_order_acquire)) {
-      // Hold roughly 20 ms before starting/restarting. The SDR can deliver
-      // audio in larger, less frequent packets than CoreAudio requests; a
-      // half-callback threshold repeatedly drained the ring between packets.
-      const int outputRate = state->sampleRate.load(std::memory_order_relaxed);
-      const size_t jitterFrames = outputRate > 0
-          ? static_cast<size_t>(outputRate / 50)
-          : 1;
-      const size_t startupFrames = std::max<size_t>(nBufferFrames * 2, jitterFrames);
-      if (state->ring.available() < startupFrames) {
-        src->releaseMixSource(sourceIndex);
-        continue;
-      }
-      state->primed.store(true, std::memory_order_release);
-    }
-
-    const float sourceGain = state->gain.load(std::memory_order_relaxed);
-    for (unsigned int i = 0; i < nBufferFrames; ++i) {
-      float left = 0.0f, right = 0.0f;
-      if (!state->ring.pop(left, right)) {
-        state->underflows.fetch_add(1, std::memory_order_relaxed);
-        state->primed.store(false, std::memory_order_release);
-        break;
-      }
-      out[i * 2] += left * sourceGain;
-      out[i * 2 + 1] += right * sourceGain;
-    }
+    // Priming, latency control and underflow handling live in render().
+    state->render(out, nBufferFrames);
     src->releaseMixSource(sourceIndex);
   }
 
@@ -576,6 +552,7 @@ void AudioThread::run() {
       if (inputQueue->pop(input, 5000)) {
         processAudioInput(input);
       }
+      reportPlayout();
     } else if (cmdQueue.pop(command, HEARTBEAT_CHECK_PERIOD_MICROS)) {
       handleCommand(command);
     }
@@ -738,6 +715,39 @@ void AudioThread::resetDenoiseProcessorLocked() {
   denoiseProcessorMode = DenoiseMode::Off;
   denoiseModelInput.clear();
   denoiseModelOutput.clear();
+}
+
+void AudioThread::reportPlayout() {
+  using Clock = std::chrono::steady_clock;
+  const auto now = Clock::now();
+  if (now - lastPlayoutCheck < std::chrono::seconds(1)) {
+    return;
+  }
+  lastPlayoutCheck = now;
+
+  // Log at once when audio dropped out or was skipped, otherwise a summary
+  // each minute while playing, so latency can be checked on real hardware.
+  const PlayoutCounters current{mixState->dropouts.load(), mixState->overflows.load(),
+                                mixState->catchUps.load()};
+  const bool interrupted = current.dropouts != reportedPlayout.dropouts ||
+                           current.overflows != reportedPlayout.overflows ||
+                           current.catchUps != reportedPlayout.catchUps;
+  const bool playing = mixState->primed.load(std::memory_order_acquire);
+  if (!interrupted && !(playing && now - lastPlayoutReport >= std::chrono::minutes(1))) {
+    return;
+  }
+
+  char line[200];
+  std::snprintf(line, sizeof(line),
+                "Audio playout: %.1f ms buffered, rate trim %+.0f ppm, dropouts %zu (+%zu), "
+                "overflows %zu (+%zu), catch-ups %zu (+%zu)",
+                mixState->bufferedMs.load(), mixState->rateTrimPpm.load(),
+                current.dropouts, current.dropouts - reportedPlayout.dropouts,
+                current.overflows, current.overflows - reportedPlayout.overflows,
+                current.catchUps, current.catchUps - reportedPlayout.catchUps);
+  std::cout << line << std::endl;
+  reportedPlayout = current;
+  lastPlayoutReport = now;
 }
 
 void AudioThread::queuePlaybackInput(const AudioThreadInputPtr& input) {

@@ -5,6 +5,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -85,6 +86,10 @@ class AudioStereoRing {
   explicit AudioStereoRing(size_t capacityFrames = 32768);
   bool push(float left, float right);
   bool pop(float& left, float& right);
+  // Consumer-side block reads: one acquire/release pair per call instead of
+  // per frame. Both return the number of frames taken.
+  size_t pop(float* interleaved, size_t frames);
+  size_t discard(size_t frames);
   // Called by the consumer; also applies any producer-requested flush.
   size_t available();
   // Observes logical fill without modifying the consumer cursor.
@@ -102,8 +107,12 @@ class AudioStereoRing {
 
 class AudioMixState {
  public:
+  AudioMixState();
   void queue(const AudioThreadInput& input);
   void clear();
+  // Adds `frames` of playback into interleaved stereo `out`. Only the audio
+  // callback may call this: it owns the ring's read side and playout state.
+  void render(float* out, size_t frames);
 
   AudioStereoRing ring;
   std::atomic_bool active{false};
@@ -112,9 +121,39 @@ class AudioMixState {
   std::atomic_int sampleRate{0};
   std::atomic_size_t overflows{0};
   std::atomic_size_t underflows{0};
+  // Underflows where audio resumed within a moment: audible gaps mid-stream,
+  // unlike the ring simply running empty when a squelch closes.
+  std::atomic_size_t dropouts{0};
+  // Playout diagnostics, published by render() once per second.
+  std::atomic<float> bufferedMs{0.0f};
+  std::atomic<float> rateTrimPpm{0.0f};
+  std::atomic_size_t catchUps{0};
 
  private:
   void clearUnlocked();
+  void startPlayout();
+  void updateRateTrim(size_t callbackFrames, int rate);
+
+  // Consumer-only playout state. SDR and sound card clocks never match
+  // exactly and stalls leave backlogs, so the read rate is trimmed slightly
+  // to hold the ring's minimum fill near a small target.
+  static constexpr size_t kRenderChunkFrames = 4096;
+  static constexpr size_t kInterpolationTaps = 16;
+  std::vector<float> scratch;
+  // Last kInterpolationTaps frames, stored twice so any window of them is
+  // contiguous; output sits between the 8th and 9th frame of the window.
+  std::array<float, kInterpolationTaps * 4> history{};
+  size_t historyHead = 0;
+  double position = 0.0;  // fractional read position within the window
+  double readRatio = 1.0;
+  bool correcting = false;
+  size_t jitterMarginFrames = 0;
+  size_t windowMinimumFill = 0;
+  size_t windowFillSum = 0;
+  size_t windowCallbacks = 0;
+  size_t windowFrames = 0;
+  bool starving = false;
+  size_t starvedFrames = 0;
 
   std::mutex producerMutex;
   bool havePrevious = false;
@@ -224,9 +263,19 @@ class AudioThread : public IOThread {
   std::vector<float> denoiseModelOutput;
   ReBuffer<AudioThreadInput> denoiseOutputBuffers{"RNNoiseOutputBuffers"};
 
+  struct PlayoutCounters {
+    size_t dropouts = 0;
+    size_t overflows = 0;
+    size_t catchUps = 0;
+  };
+  PlayoutCounters reportedPlayout;
+  std::chrono::steady_clock::time_point lastPlayoutCheck{};
+  std::chrono::steady_clock::time_point lastPlayoutReport{};
+
   void setupDevice(int deviceId);
   void setSampleRate(int sampleRate_in);
   void processAudioInput(const AudioThreadInputPtr& input);
+  void reportPlayout();
   void queuePlaybackInput(const AudioThreadInputPtr& input);
   void resetDenoiseProcessorLocked();
 

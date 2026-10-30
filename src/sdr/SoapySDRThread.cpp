@@ -7,6 +7,9 @@
 #include "CubicSDR.h"
 #include <string>
 #include <algorithm>
+#ifdef __APPLE__
+#include <pthread.h>
+#endif
 #include <chrono>
 
 #define TARGET_DISPLAY_FPS (60)
@@ -714,12 +717,14 @@ void SDRThread::updateSettings() {
 }
 
 void SDRThread::run() {
-//#ifdef __APPLE__
-//    pthread_t tID = pthread_self();  // ID of this thread
-//    int priority = sched_get_priority_max( SCHED_FIFO);
-//    sched_param prio = { priority }; // scheduling priority of thread
-//    pthread_setschedparam(tID, SCHED_FIFO, &prio);
-//#endif
+#ifdef __APPLE__
+    // The reader must keep up with the device or USB buffers overflow and
+    // samples are lost; give it the same QoS as the demod and audio threads
+    // it feeds, so UI load cannot push it onto efficiency cores.
+    if (__builtin_available(macOS 10.10, *)) {
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    }
+#endif
 
     std::cout << "SDR thread starting." << std::endl;
     

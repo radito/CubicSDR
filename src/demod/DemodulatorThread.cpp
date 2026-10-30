@@ -129,14 +129,13 @@ void DemodulatorThread::run() {
       continue;
     }
 
-    std::vector<liquid_float_complex>* inputData;
-
-    inputData = &inp->data;
-
     modemData.sampleRate = inp->sampleRate;
     modemData.discontinuity = inp->discontinuity;
     modemData.retuned = inp->retuned;
-    modemData.data.assign(inputData->begin(), inputData->end());
+    // Take the block instead of copying it; modems only read their input and
+    // the pooled buffer gets the previous block's storage back.
+    modemData.data.swap(inp->data);
+    const std::vector<liquid_float_complex>* inputData = &modemData.data;
 
     AudioThreadInputPtr ati = nullptr;
 
@@ -163,15 +162,15 @@ void DemodulatorThread::run() {
     }
 
     double power = 0.0;
-    for (const auto &sample : inp->data) {
+    for (const auto &sample : *inputData) {
       const double real = sample.real;
       const double imag = sample.imag;
       power += real * real + imag * imag;
     }
     double currentSignalLevel = 10.0 * std::log10(
-        std::max(power / static_cast<double>(inp->data.size()), 1.0e-20));
+        std::max(power / static_cast<double>(bufSize), 1.0e-20));
     double sampleTime = inp->sampleRate > 0
-        ? double(inp->data.size()) / double(inp->sampleRate)
+        ? double(bufSize) / double(inp->sampleRate)
         : 0.0;
     const float squelchSignalLevel = squelchDetector.update(
         static_cast<float>(currentSignalLevel), sampleTime,

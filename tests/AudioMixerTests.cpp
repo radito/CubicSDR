@@ -3,9 +3,81 @@
 #include "TestHarness.h"
 #include "AudioThread.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <thread>
 #include <vector>
+
+namespace {
+
+// An SDR delivering 800-frame audio packets on its own clock, which runs
+// `producerPpm` fast or slow against a sound card pulling 480-frame callbacks.
+class PlayoutSim {
+public:
+    static constexpr int kRate = 48000;
+    static constexpr size_t kCallback = 480;
+    static constexpr size_t kPacket = 800;
+
+    explicit PlayoutSim(double producerPpm, bool ramp = false)
+        : ppm(producerPpm), rampContent(ramp) {
+        state.sampleRate = kRate;
+    }
+
+    // One sound card callback; packets due by then are queued, or held back
+    // as a backlog while the pipeline is stalled.
+    void step(bool deliver = true) {
+        cardTime += kCallback;
+        while (nextPacket <= cardTime) {
+            AudioThreadInput packet;
+            packet.sampleRate = kRate;
+            packet.channels = 1;
+            for (size_t i = 0; i < kPacket; ++i, ++produced) {
+                const float value = rampContent
+                    ? static_cast<float>(produced % 4096) / 4096.0f + 0.001f
+                    : 0.5f * static_cast<float>(std::sin(2.0 * M_PI * 1000.0 * produced / kRate));
+                packet.data.push_back(value);
+                input.push_back(value);
+            }
+            if (deliver) {
+                state.queue(packet);
+            } else {
+                backlog.push_back(packet);
+            }
+            nextPacket += kPacket / (1.0 + ppm * 1.0e-6);
+        }
+        bufferedFrames = state.ring.producerAvailable();
+        std::vector<float> out(kCallback * 2, 0.0f);
+        state.render(out.data(), kCallback);
+        for (size_t i = 0; i < kCallback; ++i) played.push_back(out[i * 2]);
+    }
+
+    void run(double seconds, bool deliver = true) {
+        for (int i = 0; i < seconds * kRate / kCallback; ++i) step(deliver);
+    }
+
+    void releaseBacklog() {
+        for (const auto& packet : backlog) state.queue(packet);
+        backlog.clear();
+    }
+
+    double bufferedMs() const { return 1000.0 * bufferedFrames / kRate; }
+
+    AudioMixState state;
+    std::vector<float> input;
+    std::vector<float> played;
+
+private:
+    double ppm;
+    bool rampContent;
+    double cardTime = 0.0;
+    double nextPacket = 0.0;
+    size_t produced = 0;
+    size_t bufferedFrames = 0;
+    std::vector<AudioThreadInput> backlog;
+};
+
+} // namespace
 
 CUBIC_TEST(audio_ring_flush_is_applied_by_pop_and_reports_logical_fill) {
     AudioStereoRing ring(2);
@@ -190,4 +262,93 @@ CUBIC_TEST(audio_mix_state_converts_mono_and_resets_on_discontinuity) {
     state.sampleRate.store(0);
     state.queue(input);
     CUBIC_REQUIRE(state.ring.available() == 0);
+}
+
+CUBIC_TEST(audio_playout_is_bit_exact_without_clock_drift) {
+    PlayoutSim sim(0.0, true);
+    sim.run(60.0);
+    CUBIC_REQUIRE(sim.state.underflows == 0);
+    CUBIC_REQUIRE(sim.state.rateTrimPpm == 0.0f);
+    const auto start = std::find_if(sim.played.begin(), sim.played.end(),
+                                    [](float v) { return v != 0.0f; });
+    CUBIC_REQUIRE(start != sim.played.end());
+    const size_t offset = static_cast<size_t>(start - sim.played.begin());
+    for (size_t i = offset; i < sim.played.size(); ++i) {
+        CUBIC_REQUIRE(sim.played[i] == sim.input[i - offset]);
+    }
+}
+
+CUBIC_TEST(audio_playout_holds_latency_through_clock_drift) {
+    // Uncontrolled, 300 ppm over five minutes is 90 ms of drift: latency
+    // creeping up, or the ring running dry every few minutes.
+    for (double ppm : {300.0, -300.0}) {
+        PlayoutSim sim(ppm);
+        sim.run(10.0);
+        double worstMs = 0.0;
+        for (int second = 0; second < 290; ++second) {
+            sim.run(1.0);
+            worstMs = std::max(worstMs, sim.bufferedMs());
+        }
+        CUBIC_REQUIRE(sim.state.underflows == 0);
+        CUBIC_REQUIRE(sim.state.overflows == 0);
+        CUBIC_REQUIRE(worstMs < 60.0);
+        CUBIC_REQUIRE(std::fabs(sim.state.rateTrimPpm.load()) <= 500.0f);
+
+        // No clicks: a 1 kHz tone at 0.5 never steps more than 0.066.
+        const auto start = std::find_if(sim.played.begin(), sim.played.end(),
+                                        [](float v) { return v != 0.0f; });
+        float largestStep = 0.0f;
+        for (auto it = start + 1; it < sim.played.end(); ++it) {
+            largestStep = std::max(largestStep, std::fabs(*it - *(it - 1)));
+        }
+        CUBIC_REQUIRE(largestStep < 0.07f);
+    }
+}
+
+CUBIC_TEST(audio_playout_skips_a_stall_backlog) {
+    PlayoutSim sim(0.0);
+    sim.run(5.0);
+    const double normalMs = sim.bufferedMs();
+    // The demodulator stalls for 300 ms while the SDR keeps sampling; the
+    // ring runs dry, then the whole backlog arrives at once.
+    sim.run(0.3, false);
+    CUBIC_REQUIRE(sim.state.underflows == 1);
+    sim.releaseBacklog();
+    sim.run(1.0);
+    CUBIC_REQUIRE(sim.state.catchUps == 1);
+    CUBIC_REQUIRE(sim.bufferedMs() < normalMs + 25.0);
+}
+
+CUBIC_TEST(audio_playout_counts_only_mid_stream_gaps_as_dropouts) {
+    PlayoutSim sim(0.0);
+    sim.run(2.0);
+    sim.run(0.05, false);  // brief stall: audio stops and resumes
+    sim.releaseBacklog();
+    sim.run(1.0);
+    CUBIC_REQUIRE(sim.state.dropouts == 1);
+    sim.run(2.0, false);  // transmission ends, e.g. squelch closes
+    sim.run(1.0);
+    CUBIC_REQUIRE(sim.state.underflows == 2);
+    CUBIC_REQUIRE(sim.state.dropouts == 1);
+}
+
+CUBIC_TEST(audio_playout_keeps_squelch_preroll) {
+    // A squelch opening queues 50 ms of pre-roll with its first block; that is
+    // audio worth hearing, not a backlog to skip.
+    AudioMixState state;
+    state.sampleRate = 48000;
+    AudioThreadInput packet;
+    packet.sampleRate = 48000;
+    packet.channels = 1;
+    packet.data.assign(3200, 0.25f);
+    state.queue(packet);
+    size_t heard = 0;
+    for (int callback = 0; callback < 20; ++callback) {
+        std::vector<float> out(960, 0.0f);
+        state.render(out.data(), 480);
+        for (size_t i = 0; i < 480; ++i) heard += out[i * 2] == 0.25f;
+    }
+    CUBIC_REQUIRE(state.catchUps == 0);
+    // All but the interpolation lookahead held when the stream ends.
+    CUBIC_REQUIRE(heard >= 3200 - 9);
 }
