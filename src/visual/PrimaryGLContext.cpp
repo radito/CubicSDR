@@ -123,14 +123,23 @@ void PrimaryGLContext::DrawDemodInfo(const DemodulatorInstancePtr& demod, const 
         labelBg.g = sinf(2.0f * M_PI * (float(t) / 1000.0f)) * 0.25f + 0.75f;
     }
 
+    // Modem status may carry a second line (RDS RadioText) drawn above the label.
+    const std::string modemStatus = demod->getModemStatus();
+    const size_t statusBreak = modemStatus.find('\n');
+    const std::string statusLine = modemStatus.substr(0, statusBreak);
+    const std::string statusDetail = statusBreak == std::string::npos
+        ? std::string() : modemStatus.substr(statusBreak + 1);
+    const float lineStep = 36.0f * float(GLFont::getScaleFactor()) / viewHeight;
+    const float labelTop = hPos + labelHeight + (statusDetail.empty() ? 0.0f : lineStep);
+
     glColor4f(labelBg.r, labelBg.g, labelBg.b, labelBg.a);
-    
+
     glBegin(GL_QUADS);
-    glVertex3f(uxPos - ofsLeft, hPos + labelHeight, 0.0);
+    glVertex3f(uxPos - ofsLeft, labelTop, 0.0);
     glVertex3f(uxPos - ofsLeft, -1.0, 0.0);
 
     glVertex3f(uxPos + ofsRight, -1.0, 0.0);
-    glVertex3f(uxPos + ofsRight, hPos + labelHeight, 0.0);
+    glVertex3f(uxPos + ofsRight, labelTop, 0.0);
     glEnd();
 
     glBlendFunc(GL_SRC_ALPHA, GL_ONE);
@@ -187,17 +196,19 @@ void PrimaryGLContext::DrawDemodInfo(const DemodulatorInstancePtr& demod, const 
     }    
     // Append the default label
     demodLabel.append(demod->getLabel());
-    const std::string modemStatus = demod->getModemStatus();
-    if (!modemStatus.empty()) {
-        demodLabel.append(" ").append(modemStatus);
+    if (!statusLine.empty()) {
+        demodLabel.append(" ").append(statusLine);
     }
 
+    GLFont::Align labelAlign = GLFont::GLFONT_ALIGN_CENTER;
     if (demod->getDemodulatorType() == "USB") {
-        GLFont::getFont(16, GLFont::getScaleFactor()).drawString(demodLabel, uxPos, hPos, GLFont::GLFONT_ALIGN_LEFT, GLFont::GLFONT_ALIGN_CENTER, 0, 0, true);
+        labelAlign = GLFont::GLFONT_ALIGN_LEFT;
     } else if (demod->getDemodulatorType() == "LSB") {
-        GLFont::getFont(16, GLFont::getScaleFactor()).drawString(demodLabel, uxPos, hPos, GLFont::GLFONT_ALIGN_RIGHT, GLFont::GLFONT_ALIGN_CENTER, 0, 0, true);
-    } else {
-        GLFont::getFont(16, GLFont::getScaleFactor()).drawString(demodLabel, uxPos, hPos, GLFont::GLFONT_ALIGN_CENTER, GLFont::GLFONT_ALIGN_CENTER, 0, 0, true);
+        labelAlign = GLFont::GLFONT_ALIGN_RIGHT;
+    }
+    GLFont::getFont(16, GLFont::getScaleFactor()).drawString(demodLabel, uxPos, hPos, labelAlign, GLFont::GLFONT_ALIGN_CENTER, 0, 0, true);
+    if (!statusDetail.empty()) {
+        GLFont::getFont(16, GLFont::getScaleFactor()).drawString(statusDetail, uxPos, hPos + lineStep, labelAlign, GLFont::GLFONT_ALIGN_CENTER, 0, 0, true);
     }
 
     glDisable(GL_BLEND);

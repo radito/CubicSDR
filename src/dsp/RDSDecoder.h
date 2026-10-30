@@ -28,6 +28,11 @@ public:
     void processBit(bool bit);
 
 private:
+    struct Group {
+        std::array<uint16_t, 4> words{};
+        // Bit n is set when block n needed error correction.
+        uint8_t corrected = 0;
+    };
     struct BlockState {
         uint32_t shift = 0;
         int countdown = 0;
@@ -35,7 +40,16 @@ private:
         int validGroups = 0;
         int consecutiveErrors = 0;
         bool groupValid = false;
-        std::array<uint16_t, 4> words{};
+        Group group;
+        Group previousGroup;
+    };
+    // A character from a corrected block is shown only once a later
+    // transmission repeats it.
+    struct TextCell {
+        char value = ' ';
+        char candidate = 0;
+        uint64_t candidateSample = 0;
+        bool committed = false;
     };
     struct PhaseState {
         liquid_float_complex previous{};
@@ -57,8 +71,10 @@ private:
     BlockState directBlocks;
     uint64_t sampleIndex = 0;
     uint16_t programId = 0;
-    std::array<char, 8> programService{};
-    uint8_t serviceSegments = 0;
+    std::array<TextCell, 8> programService{};
+    std::array<TextCell, 64> radioText{};
+    int radioTextFlag = -1;
+    std::string radioTextDisplay;
     uint8_t programType = 0;
     bool trafficProgram = false;
     bool trafficAnnouncement = false;
@@ -72,7 +88,11 @@ private:
                        bool allowTentativeSync = false);
     void processRecoveredBit(BlockState& state, bool bit,
                              bool allowTentativeSync = false);
-    void acceptGroup(BlockState& state);
+    void confirmGroup(BlockState& state);
+    void acceptGroup(const Group& group, int validGroups);
+    void decodeRadioText(const Group& group);
+    void clearRadioText();
+    void storeCharacter(TextCell& cell, uint8_t value, bool corrected) const;
     void publishStatus(int validGroups);
     void publishSearching();
 };

@@ -3,16 +3,32 @@
 
 #include "ModemFMStereo.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace {
 constexpr float RDS_SAMPLE_RATE = 19000.0f;
 constexpr float RDS_CUTOFF = 3000.0f;
 constexpr float STEREO_PILOT_HZ = 19000.0f;
 constexpr float PILOT_MAX_DEVIATION_HZ = 1000.0f;
+constexpr float PILOT_WINDOW_SECONDS = 0.05f;
+// Fraction of pilot-band power coherent with 19 kHz over one window. Pilots
+// measure above 0.45 down to 0 dB RF SNR; noise and mono stay below 0.21.
+constexpr float PILOT_PRESENT_RATIO = 0.40f;
+constexpr float PILOT_ABSENT_RATIO = 0.25f;
 
 void resetStereoPilot(nco_crcf pilot, long long sampleRate) {
     nco_crcf_reset(pilot);
     nco_crcf_set_frequency(
         pilot, 2.0f * float(M_PI) * STEREO_PILOT_HZ / float(sampleRate));
+}
+
+void resetPilotDetector(ModemKitFMStereo *kit) {
+    kit->pilotReference = {1.0f, 0.0f};
+    kit->pilotCorrelation = {0.0f, 0.0f};
+    kit->pilotBandPower = 0.0;
+    kit->pilotWindowFill = 0;
+    kit->pilotPresent = false;
 }
 
 inline liquid_float_complex multiplyComplex(liquid_float_complex a,
@@ -21,6 +37,29 @@ inline liquid_float_complex multiplyComplex(liquid_float_complex a,
     result.real = a.real * b.real - a.imag * b.imag;
     result.imag = a.real * b.imag + a.imag * b.real;
     return result;
+}
+
+void updatePilotDetector(ModemKitFMStereo *kit) {
+    const double coherentPower =
+        (double(kit->pilotCorrelation.real) * kit->pilotCorrelation.real +
+         double(kit->pilotCorrelation.imag) * kit->pilotCorrelation.imag) /
+        double(kit->pilotWindowFill);
+    const double ratio = kit->pilotBandPower > 0.0
+        ? coherentPower / kit->pilotBandPower : 0.0;
+    if (ratio > PILOT_PRESENT_RATIO) {
+        kit->pilotPresent = true;
+    } else if (ratio < PILOT_ABSENT_RATIO) {
+        kit->pilotPresent = false;
+    }
+
+    // Repeated complex multiplies slowly drift off the unit circle.
+    const float magnitude = std::hypot(kit->pilotReference.real,
+                                       kit->pilotReference.imag);
+    kit->pilotReference.real /= magnitude;
+    kit->pilotReference.imag /= magnitude;
+    kit->pilotCorrelation = {0.0f, 0.0f};
+    kit->pilotBandPower = 0.0;
+    kit->pilotWindowFill = 0;
 }
 }
 
@@ -161,6 +200,12 @@ ModemKit *ModemFMStereo::buildKit(long long sampleRate, int audioSampleRate) {
     kit->stereoPilot = nco_crcf_create(LIQUID_VCO);
     resetStereoPilot(kit->stereoPilot, sampleRate);
     nco_crcf_pll_set_bandwidth(kit->stereoPilot, 0.01f);
+
+    const float pilotStep = 2.0f * float(M_PI) * STEREO_PILOT_HZ / float(sampleRate);
+    kit->pilotReferenceStep = {std::cos(pilotStep), std::sin(pilotStep)};
+    kit->pilotWindowLength = std::max<size_t>(
+        1, static_cast<size_t>(PILOT_WINDOW_SECONDS * float(sampleRate)));
+    resetPilotDetector(kit);
     
     kit->demph = _demph;
     
@@ -223,6 +268,7 @@ void ModemFMStereo::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInp
         firhilbf_reset(fmkit->firStereoC2R);
         iirfilt_crcf_reset(fmkit->iirStereoPilot);
         resetStereoPilot(fmkit->stereoPilot, fmkit->sampleRate);
+        resetPilotDetector(fmkit);
         if (fmkit->iirDemphL) iirfilt_rrrf_reset(fmkit->iirDemphL);
         if (fmkit->iirDemphR) iirfilt_rrrf_reset(fmkit->iirDemphR);
         if (input->retuned) {
@@ -287,13 +333,32 @@ void ModemFMStereo::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInp
         nco_crcf_pll_step(fmkit->stereoPilot, phase_error);
         nco_crcf_step(fmkit->stereoPilot);
         
+        // Correlate the pilot band with the fixed 19 kHz reference.
+        const liquid_float_complex reference = fmkit->pilotReference;
+        fmkit->pilotCorrelation.real += v.real * reference.real + v.imag * reference.imag;
+        fmkit->pilotCorrelation.imag += v.imag * reference.real - v.real * reference.imag;
+        fmkit->pilotBandPower += double(v.real) * v.real + double(v.imag) * v.imag;
+        fmkit->pilotReference = multiplyComplex(reference, fmkit->pilotReferenceStep);
+        if (++fmkit->pilotWindowFill == fmkit->pilotWindowLength) {
+            updatePilotDetector(fmkit);
+        }
+
         // Fetch the updated phasor once and reuse its powers for the 38 kHz
         // stereo and 57 kHz RDS down-mixes.
         nco_crcf_cexpf(fmkit->stereoPilot, &w);
         w.imag = -w.imag;
+        const liquid_float_complex analytic = x;
         y = multiplyComplex(x, w);
         x = multiplyComplex(y, w);
-        rdsMixedData[i] = multiplyComplex(x, w);
+        if (fmkit->pilotPresent) {
+            rdsMixedData[i] = multiplyComplex(x, w);
+        } else {
+            // Mono stations carry RDS at 57 kHz +/-6 Hz with no pilot to
+            // lock to; differential decoding tolerates the small offset.
+            liquid_float_complex carrier = {reference.real, -reference.imag};
+            carrier = multiplyComplex(multiplyComplex(carrier, carrier), carrier);
+            rdsMixedData[i] = multiplyComplex(analytic, carrier);
+        }
         
         // complex -> real
         float usb_discard;

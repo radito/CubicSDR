@@ -29,6 +29,17 @@ public:
     firhilbf firStereoC2R;
     
     nco_crcf stereoPilot;
+
+    // Pilot presence is measured against a fixed 19 kHz reference because the
+    // PLL also locks onto band-passed noise. Without a pilot, RDS is mixed
+    // down with the fixed reference instead of the wandering PLL.
+    liquid_float_complex pilotReference{1.0f, 0.0f};
+    liquid_float_complex pilotReferenceStep{1.0f, 0.0f};
+    liquid_float_complex pilotCorrelation{0.0f, 0.0f};
+    double pilotBandPower = 0.0;
+    size_t pilotWindowFill = 0;
+    size_t pilotWindowLength = 0;
+    bool pilotPresent = false;
 };
 
 
