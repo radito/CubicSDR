@@ -13,32 +13,32 @@ What's new in this fork
 
 This fork is based on [cjcliffe/CubicSDR](https://github.com/cjcliffe/CubicSDR). Native macOS Apple Silicon (ARM64) DMGs are built by GitHub Actions and published on the [fork's Releases](https://github.com/radito/CubicSDR/releases) page.
 
-Changes are grouped by area. **Type** marks whether a change is a new feature, an optimization or a fix.
+Changes are grouped by area. **Type** marks whether a change is a new feature (green), an optimization (blue) or a fix (yellow).
 
 | Area | Type | Change | Details |
 |------|------|--------|---------|
-| **RDS** | New | RDS decoding | PI, PS, PTY, TP, TA on the FMS demod |
-| | New | RadioText | 2A/2B text shown above the demod label |
-| | New | Mono-station RDS | Decodes stations without a 19 kHz pilot |
-| | Optimized | Error correction | 5-bit burst fix, no garbage on weak signals |
-| **Squelch** | New | NBFM "Q" squelch | Noise-based, stays open in speech pauses |
-| | Fixed | Click-free gating | Pre-roll, fades, ~120 ms tail |
-| **Audio** | New | RNNoise | Off / Mid / Strong noise reduction |
-| | New | De-emphasis | Configurable for FM and NBFM |
-| | New | Playout diagnostics | Logs latency, dropouts, overflows |
-| | Optimized | Latency control | Bounded delay despite clock drift and stalls |
-| | Optimized | Lock-free ring buffers | No mutexes in the audio callback |
-| **DSP & modems** | New | Symbol sync | Timing recovery for digital modes |
-| | Optimized | Fewer copies | IQ swapped, circular FFT buffer |
-| | Fixed | Stream gaps | Tuning survives resets and packet edges |
-| **Spectrum & graphics** | New | 3D spectrum history | Audio history view and FFT overlay |
-| | Optimized | VBO rendering | 3 draw calls per frame, compact waterfall |
-| | Fixed | FFT power | Hann window, normalized dB, no NaN |
-| **SDR & threads** | Optimized | macOS QoS | All DSP threads at user-interactive priority |
-| | Fixed | Runtime stability | SoapyRemote, timeouts, reconnect, shutdown |
-| **Build & tests** | New | macOS app bundle | Native ARM64, LTO, LZMA DMG (~19% smaller) |
-| | New | `./build.sh` | One-command build (see [Building](#building)) |
-| | New | Unit tests | Hardware-free: RDS, squelch, audio, modems |
+| **RDS** | ![New](https://img.shields.io/badge/New-2ea44f?style=flat-square) | RDS decoding | PI, PS, PTY, TP, TA on the FMS demod |
+| | ![New](https://img.shields.io/badge/New-2ea44f?style=flat-square) | RadioText | 2A/2B text shown above the demod label |
+| | ![New](https://img.shields.io/badge/New-2ea44f?style=flat-square) | Mono-station RDS | Decodes stations without a 19 kHz pilot |
+| | ![Optimized](https://img.shields.io/badge/Optimized-0969da?style=flat-square) | Error correction | 5-bit burst fix, no garbage on weak signals |
+| **Squelch** | ![New](https://img.shields.io/badge/New-2ea44f?style=flat-square) | NBFM "Q" squelch | Noise-based, stays open in speech pauses |
+| | ![Fixed](https://img.shields.io/badge/Fixed-d4a72c?style=flat-square) | Click-free gating | Pre-roll, fades, ~120 ms tail |
+| **Audio** | ![New](https://img.shields.io/badge/New-2ea44f?style=flat-square) | RNNoise | Off / Mid / Strong noise reduction |
+| | ![New](https://img.shields.io/badge/New-2ea44f?style=flat-square) | De-emphasis | Configurable for FM and NBFM |
+| | ![New](https://img.shields.io/badge/New-2ea44f?style=flat-square) | Playout diagnostics | Logs latency, dropouts, overflows |
+| | ![Optimized](https://img.shields.io/badge/Optimized-0969da?style=flat-square) | Latency control | Bounded delay despite clock drift and stalls |
+| | ![Optimized](https://img.shields.io/badge/Optimized-0969da?style=flat-square) | Lock-free ring buffers | No mutexes in the audio callback |
+| **DSP & modems** | ![New](https://img.shields.io/badge/New-2ea44f?style=flat-square) | Symbol sync | Timing recovery for digital modes |
+| | ![Optimized](https://img.shields.io/badge/Optimized-0969da?style=flat-square) | Fewer copies | IQ swapped, circular FFT buffer |
+| | ![Fixed](https://img.shields.io/badge/Fixed-d4a72c?style=flat-square) | Stream gaps | Tuning survives resets and packet edges |
+| **Spectrum & graphics** | ![New](https://img.shields.io/badge/New-2ea44f?style=flat-square) | 3D spectrum history | Audio history view and FFT overlay |
+| | ![Optimized](https://img.shields.io/badge/Optimized-0969da?style=flat-square) | VBO rendering | 3 draw calls per frame, compact waterfall |
+| | ![Fixed](https://img.shields.io/badge/Fixed-d4a72c?style=flat-square) | FFT power | Hann window, normalized dB, no NaN |
+| **SDR & threads** | ![Optimized](https://img.shields.io/badge/Optimized-0969da?style=flat-square) | macOS QoS | All DSP threads at user-interactive priority |
+| | ![Fixed](https://img.shields.io/badge/Fixed-d4a72c?style=flat-square) | Runtime stability | SoapyRemote, timeouts, reconnect, shutdown |
+| **Build & tests** | ![New](https://img.shields.io/badge/New-2ea44f?style=flat-square) | macOS app bundle | Native ARM64, LTO, LZMA DMG (~19% smaller) |
+| | ![New](https://img.shields.io/badge/New-2ea44f?style=flat-square) | `./build.sh` | One-command build (see [Building](#building)) |
+| | ![New](https://img.shields.io/badge/New-2ea44f?style=flat-square) | Unit tests | Hardware-free: RDS, squelch, audio, modems |
 
 Building
 --------
