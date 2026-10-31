@@ -13,37 +13,32 @@ What's new in this fork
 
 This fork is based on [cjcliffe/CubicSDR](https://github.com/cjcliffe/CubicSDR). Native macOS Apple Silicon (ARM64) DMGs are built by GitHub Actions and published on the [fork's Releases](https://github.com/radito/CubicSDR/releases) page.
 
-### New features
+Changes are grouped by area. **Type** marks whether a change is a new feature, an optimization or a fix.
 
-| Area | Feature | Details |
-|------|---------|---------|
-| RDS | FM RDS decoding | Decodes PI, PS (station name), PTY, TP and TA on the FMS (FM stereo) demodulator. Shows sync state, resets on retune. |
-| RDS | RadioText | Decodes groups 2A/2B, handling the A/B flag and the end-of-text marker. Shows the complete text on a second line above the demodulator label. |
-| RDS | Mono-station RDS | Detects the 19 kHz pilot. When a station has no pilot, RDS is mixed with a fixed 57 kHz carrier, so mono stations still decode. |
-| RDS | Weak-signal error correction | Corrects error bursts of up to 5 bits once locked. A station is confirmed by two consecutive groups with the same PI. A character from a corrected block is shown only after it repeats, so noise doesn't produce garbage text. |
-| Squelch | NBFM noise-quality squelch ("Q" toggle) | Measures noise above the voice band against the open-channel level, so speech pauses, off-tune signals and CTCSS tones no longer close the squelch. Saved per demodulator. |
-| Squelch | Click-free gating | Smoothed level, pre-roll and fades. The hang time depends on why the squelch closes: 500 ms when the level dips but audio is clean, 60 ms on noise (tail about 120 ms). Decides on IQ power, not audio power. |
-| Audio | RNNoise noise reduction | Selectable Off / Mid (legacy model, more sensitive on weak signals) / Strong (newer model). Correct 48 kHz framing and resampling. |
-| Audio | FM/NBFM de-emphasis | Configurable de-emphasis time constant. |
-| Visuals | 3D spectrum history | 3D history view for demodulated audio, plus an optional overlay for the main FFT. Toggled from the button below peak hold. |
-| Digital | Symbol synchronization | Digital modems use symbol-timing recovery; FSK buffering improved. |
-| SDR | Runtime stability | Better SoapyRemote persistence, stream-timeout handling, disconnect recovery and shutdown, to prevent UI freezes and crashes. |
-
-### Optimizations and fixes
-
-| Area | Change | Effect |
-|------|--------|--------|
-| Audio | Lock-free stereo ring buffers | Replace queues and mutexes in the audio callback with atomic ring buffers. Steadier macOS playback. |
-| Audio | Playout latency control | Trims the playback rate by at most ±500 ppm with a windowed-sinc interpolator (bit-exact when no trim is needed). Latency stays bounded instead of creeping up from SDR/sound-card clock drift. After a stall, the backlog is skipped instead of becoming permanent delay. |
-| Audio | Playout diagnostics | Logs buffered latency, rate trim, dropouts, overflows and catch-ups. |
-| Threads | macOS QoS | SDR reader, post-processing, demodulator and audio threads all run at user-interactive QoS, avoiding priority inversion. |
-| DSP | Fewer copies | IQ blocks are swapped into the modem instead of copied. The FFT uses a circular buffer. Visual queues and buffer caches are bounded. |
-| DSP | Stream-gap handling | Stream-gap metadata is propagated without guessing from timestamp jitter. Oscillator tuning and partial channelizer blocks survive resets and packet boundaries. |
-| Spectrum | Correct FFT power | Hann window and normalized FFT power. Fixes NaN dB rendering and spectrum speed sync. |
-| Graphics | VBO rendering | 3D history uses cached vertex buffers (three draw calls per frame). The waterfall uses compact palette-shaded textures. OpenGL contexts are released properly. |
-| macOS | Self-contained app bundle | Bundled, relocated and validated dependencies. Native ARM64 build with `-O3 -mcpu=apple-m1` and LTO in CI. The DMG uses LZMA compression (about 18.6% smaller). |
-| Build | `./build.sh` | One-command local macOS build and bundle using Homebrew dependencies (`--clean`, `--run`). |
-| Tests | Unit test suite | Hardware-free tests covering RDS (end-to-end through the FMS demodulator), NBFM squelch, audio playout simulation, modems, FFT and device capabilities. |
+| Area | Type | Change | Details |
+|------|------|--------|---------|
+| **RDS** | New | FM RDS decoding | Decodes PI, PS (station name), PTY, TP and TA on the FMS (FM stereo) demodulator. Shows sync state, resets on retune. |
+| | New | RadioText | Decodes groups 2A/2B, handling the A/B flag and the end-of-text marker. Shows the complete text on a second line above the demodulator label. |
+| | New | Mono-station RDS | Detects the 19 kHz pilot. When a station has no pilot, RDS is mixed with a fixed 57 kHz carrier, so mono stations still decode. |
+| | Optimized | Weak-signal error correction | Corrects error bursts of up to 5 bits once locked. A station is confirmed by two consecutive groups with the same PI. A character from a corrected block is shown only after it repeats, so noise doesn't produce garbage text. |
+| **Squelch** | New | NBFM noise-quality squelch ("Q" toggle) | Measures noise above the voice band against the open-channel level, so speech pauses, off-tune signals and CTCSS tones no longer close the squelch. Saved per demodulator. |
+| | Fixed | Click-free gating | Smoothed level, pre-roll and fades. The hang time depends on why the squelch closes: 500 ms when the level dips but audio is clean, 60 ms on noise (tail about 120 ms). Decides on IQ power, not audio power. |
+| **Audio** | New | RNNoise noise reduction | Selectable Off / Mid (legacy model, more sensitive on weak signals) / Strong (newer model). Correct 48 kHz framing and resampling. |
+| | New | FM/NBFM de-emphasis | Configurable de-emphasis time constant. |
+| | New | Playout diagnostics | Logs buffered latency, rate trim, dropouts, overflows and catch-ups. |
+| | Optimized | Playout latency control | Trims the playback rate by at most ±500 ppm with a windowed-sinc interpolator (bit-exact when no trim is needed). Latency stays bounded instead of creeping up from SDR/sound-card clock drift. After a stall, the backlog is skipped instead of becoming permanent delay. |
+| | Optimized | Lock-free stereo ring buffers | Replace queues and mutexes in the audio callback with atomic ring buffers. Steadier macOS playback. |
+| **DSP & modems** | New | Symbol synchronization | Digital modems use symbol-timing recovery; FSK buffering improved. |
+| | Optimized | Fewer copies | IQ blocks are swapped into the modem instead of copied. The FFT uses a circular buffer. Visual queues and buffer caches are bounded. |
+| | Fixed | Stream-gap handling | Stream-gap metadata is propagated without guessing from timestamp jitter. Oscillator tuning and partial channelizer blocks survive resets and packet boundaries. |
+| **Spectrum & graphics** | New | 3D spectrum history | 3D history view for demodulated audio, plus an optional overlay for the main FFT. Toggled from the button below peak hold. |
+| | Optimized | VBO rendering | 3D history uses cached vertex buffers (three draw calls per frame). The waterfall uses compact palette-shaded textures. OpenGL contexts are released properly. |
+| | Fixed | Correct FFT power | Hann window and normalized FFT power. Fixes NaN dB rendering and spectrum speed sync. |
+| **SDR & threads** | Optimized | macOS QoS | SDR reader, post-processing, demodulator and audio threads all run at user-interactive QoS, avoiding priority inversion. |
+| | Fixed | Runtime stability | Better SoapyRemote persistence, stream-timeout handling, disconnect recovery and shutdown, to prevent UI freezes and crashes. |
+| **Build & tests** | New | Self-contained macOS app bundle | Bundled, relocated and validated dependencies. Native ARM64 build with `-O3 -mcpu=apple-m1` and LTO in CI. The DMG uses LZMA compression (about 18.6% smaller). |
+| | New | `./build.sh` | One-command local macOS build and bundle using Homebrew dependencies (see [Building](#building)). |
+| | New | Unit test suite | Hardware-free tests covering RDS (end-to-end through the FMS demodulator), NBFM squelch, audio playout simulation, modems, FFT and device capabilities. |
 
 Building
 --------
